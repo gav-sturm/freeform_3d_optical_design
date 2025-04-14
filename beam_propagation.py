@@ -52,7 +52,7 @@ class Coordinates:
         xf, yf, zf = map(float, xyz_f)
         nx, ny, nz = map(  int, n_xyz)
         # If your simulation cross section is too small, you're
-        # dominated by edge effects; we demand at least 20x20 pixels:
+        # dominated by edge effects; we demand at least 1x21x21 pixels:
         assert nx > 20
         assert ny > 20
         assert nz > 0
@@ -61,7 +61,6 @@ class Coordinates:
                     np.linspace(yi, yf, ny).reshape( 1, ny,  1),
                     np.linspace(zi, zf, nz).reshape(nz,  1,  1))
         self.x, self.y, self.z = self.xyz
-        x, y, z = self.xyz
         # - Shape of voxels:
         dx, dy, dz = (xf-xi)/(nx-1), (yf-yi)/(ny-1), (zf-zi)/(nz-1)
         self.d_xyz = dx, dy, dz
@@ -136,6 +135,7 @@ class BeamPropagation:
         closer to yielding our desired output.
         """
         self._require('input_field', 'set_2d_input_field')
+        self._require('wavelength', 'set_2d_input_field')
         nx, ny, nz = self.coordinates.n_xyz
         assert desired_field.shape == (ny, nx)
         assert desired_field.dtype == 'complex128'
@@ -148,10 +148,11 @@ class BeamPropagation:
         """Propagate the input field through each z-slice of the volume.
         """
         self._require('input_field', 'set_2d_input_field')
+        self._require('wavelength', 'set_2d_input_field')
         self._require('density', 'set_3d_density')
         nx, ny, nz = self.coordinates.n_xyz
         dx, dy, dz = self.coordinates.d_xyz
-        input_field = self.input_field # Call `set_2d_input_field()` first!
+        input_field, wavelength = self.input_field, self.wavelength
         # How do amplitude and phase change from one slice to the next?
         amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
         phase_mask     = self._propagation_phase_mask(dz)
@@ -167,7 +168,7 @@ class BeamPropagation:
         # gradient search, so we need `requires_grad`:
         density          = torch.from_numpy(self.density)
         density.requires_grad_(True)
-        phase_shifts     = self._density_to_phase_shifts(density)
+        phase_shifts     = self._density_to_phase_shifts(density, wavelength)
         # Iterate over the slices, fft, multiply, ifft, multiply.
         for i in range(nz):
             calculated_field[i+1, :, :] = (
@@ -181,10 +182,7 @@ class BeamPropagation:
             'error_3d', '_loss_tensor', 'loss', 'gradient'))
         return None
 
-    def calculate_loss(
-        self,
-        z_planes=(1, 2, 3)
-        ):
+    def calculate_loss(self, z_planes=(1, 2, 3)):
         """How well does our calculated field match our desired field?
 
         This function doesn't return a value; it populates the
@@ -213,7 +211,7 @@ class BeamPropagation:
         for d, c in zip(desired_output_3d, calculated_output_3d):
             desired_intensity    = d.abs()**2
             calculated_intensity = c.abs()**2
-            intensity_error = (desired_intensity - calculated_intensity)
+            intensity_error = (calculated_intensity - desired_intensity)
             error_3d.append(intensity_error.detach().clone().numpy())
             worst_case_intensity_error = (desired_intensity +
                                           calculated_intensity).sum()
@@ -235,6 +233,7 @@ class BeamPropagation:
         return None
 
     def _propagation_phase_mask(self, distance):
+        self._require('wavelength', 'set_2d_input_field')
         nx, ny, nz = self.coordinates.n_xyz
         dx, dy, dz = self.coordinates.d_xyz
         # Spatial frequencies as a function of position in FFT space:
@@ -253,7 +252,7 @@ class BeamPropagation:
         # simulation volume.
         edge_pixels = int(edge_pixels)
         assert edge_pixels > 0
-        assert edge_value > 0
+        assert edge_value >= 0
         assert edge_value <= 1
         nx, ny, nz = self.coordinates.n_xyz
         assert nx > 2*edge_pixels
@@ -267,12 +266,14 @@ class BeamPropagation:
                           linear_taper(ny).reshape(ny, 1))
         return amplitude_mask
 
-    def _density_to_phase_shifts(self, density):
+    def _density_to_phase_shifts(self, density, wavelength):
+        # This function will likely be overridden by the user, keep it simple.
+        #
         # TODO: this should account for how phase shifts depend on
         # wavelength (i.e., dispersion).
         #
         # For now, just return a copy: 
-        return density + 0*self.wavelength
+        return density + 0*wavelength
 
     def _freespace_propagation(self, field, distance):
         # Like 'calculate_3d_propagation()', but for a single step, with
@@ -292,8 +293,8 @@ class BeamPropagation:
         return field_after_propagation
 
     def _invalidate(self, iterable_of_attribute_names):
-        # Many of the methods above need to invalidate multiple
-        # attributes. This makes it a little more convenient:
+        # Many of the methods above need to invalidate (i.e. delete)
+        # multiple attributes. This makes it a little more convenient:
         for attr in iterable_of_attribute_names:
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -309,7 +310,6 @@ class BeamPropagation:
                 "No attribute `%s`. Did you call `%s()` yet?"%(
                     attribute_name, prerequisite_function_name))
         return None
-
 
 ##############################################################################
 ## The following utility functions are used for the demo code, they're
