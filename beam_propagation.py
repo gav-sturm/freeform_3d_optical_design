@@ -1,39 +1,87 @@
 import numpy as np
 import torch # For calculating gradients
-# import tifffile (only used for demo code)
+# These imports are only used for the demo code:
+# from scipy import ndimage as ndi
+# import matplotlib.pyplot as plt
+# import tifffile 
 
 def main():
-    nx, ny, nz = 101, 101, 101
+    """Example code: design a 3D refractive optic with specified input/output
+
+    Techniques for fabricating freeform 3D refractive optics are rapidly
+    maturing. How shall we design these optics? Gradient search, just
+    like training a neural network!
+
+    We start with some (suboptimal) 3D refractive optic, and we generate
+    "training data": 2D arrays of complex numbers that represent the
+    amplitude and phase of optical inputs to our 3D optic. For each
+    input, we specify the output that we WISH our optic would deliver,
+    and then calculate the output it ACTUALLY delivers, for our current
+    3D refractive optic. We use the difference between desired and
+    calculated output to calculate our "loss", and use gradients of this
+    loss to update our 3D refractive optic.
+    """
+    # Specify our coordinate system, organized via a Coordinates object:
     coords = Coordinates(xyz_i=(-10, -10,   0),
                          xyz_f=(+10, +10, +20),
-                         n_xyz=( nx,  ny,  nz))
+                         n_xyz=(101, 101, 101))
+    nx, ny, nz = coords.n_xyz
+    print("Voxel dimensions:", coords.d_xyz)
 
+    # Use these coordinates to initialize an instance of BeamPropagation
+    # that will simulate how light changes as it passes through our
+    # refractive object:
     bp = BeamPropagation(coords)
-    
-    density = np.zeros((nz, ny, nx))
-    bp.set_3d_density(density)
+
+    # Initialize our object. For now, we'll start with all zeros:
+    initial_density = np.zeros((nz, ny, nx))
+    bp.set_3d_density(initial_density)
+
+    # Make a source to generate training data. In this case, the
+    # training data is for a simple plane-to-plane inverting imaging
+    # system:
+    data_source = TrainingData_for_2dImaging(coords, radius=3)
 
     wavelength = 1
+    loss_history = []
+    for iteration in range(10000):
+        # Use our data source to generate random input/output pairs:
+        input_field, desired_field = (
+            data_source.random_input_output_pair(wavelength))
+        bp.set_2d_input_field(input_field, wavelength)
+        bp.set_2d_desired_output_field(desired_field)
 
-    input_field = gaussian_beam_2d(coords, x0=0, y0=0, phi=0, theta=0,
-                                   wavelength=1, w=1)
-    bp.set_2d_input_field(input_field, wavelength)
+        # Simulate propagation through our 3D refractive object,
+        # calculate loss, and calculate a gradient that hopefully will
+        # reduce the loss:
+        bp.calculate_3d_field()
+        bp.calculate_loss(z_planes=(1, 2, 3))
+        bp.calculate_gradient()
 
-    desired_field = gaussian_beam_2d(coords, x0=0, y0=0, phi=0, theta=0,
-                                     wavelength=1, w=1)
-    bp.set_2d_desired_output_field(desired_field)
+        # Output some intermediate state, so we can monitor our progress:
+        print("At iteration", iteration, "the loss is", bp.loss)
+        loss_history.append(bp.loss)
+        if iteration % 10 == 9:
+            print("Saving TIFs etc...", end='')
+            to_tif('1_density_tensor.tif', bp._density_tensor)
+            to_tif('2_calculated_field_tensor.tif',
+                   bp._calculated_field_tensor.abs())
+            to_tif('3_calculated_field.tif', np.abs(bp.calculated_field))
+            to_tif('4_error.tif', bp.error_3d)
+            to_tif('5_gradient.tif', bp.gradient)
+            plot_loss_history(loss_history, 'loss_history.png')
+            print("done.")
 
-    bp.calculate_3d_field()
-    bp.calculate_loss(z_planes=(1, 2, 3))
-    bp.calculate_gradient()
+        # Update our 3D refractive object, using our calculated gradient:
+        step_size = 1
+        update = step_size * smooth(bp.gradient)
+        bp.set_3d_density(bp.density - update)
 
-    print("Voxel dimensions:", coords.d_xyz)
-    print("Loss:", bp.loss)
-    to_tif('1_density_tensor.tif', bp._density_tensor)
-    to_tif('2_calculated_field_tensor.tif', bp._calculated_field_tensor.abs())
-    to_tif('3_calculated_field.tif', np.abs(bp.calculated_field))
-    to_tif('4_error.tif', bp.error_3d)
-    to_tif('5_gradient.tif', bp.gradient)
+##############################################################################
+## The following blocks of code are the heart of the module. You should
+## import the module and use these classes, similar to the demo code
+## above.
+##############################################################################
 
 class Coordinates:
     """A convenience class for keeping track of the coordinates of our voxels.
@@ -93,7 +141,7 @@ class BeamPropagation:
         nx, ny, nz = self.coordinates.n_xyz
         assert density.shape == (nz, ny, nx)
         assert np.isrealobj(density)
-        self.density = density.astype('float64').copy()
+        self.density = density.astype('float64').copy() # TODO: redundant?
         self._invalidate(( # Remove these attributes, if they exist:
             '_density_tensor', '_calculated_field_tensor', 'calculated_field',
             'error_3d', '_loss_tensor', 'loss', 'gradient'))
@@ -216,7 +264,7 @@ class BeamPropagation:
             worst_case_intensity_error = (desired_intensity +
                                           calculated_intensity).sum()
             loss += intensity_error.abs().sum() / worst_case_intensity_error
-        loss = loss / len(z_planes)
+        loss = loss / (len(z_planes) + 1)
         # Save our results as attributes, not return values:
         self.error_3d = np.array(error_3d)
         self._loss_tensor = loss
@@ -272,7 +320,7 @@ class BeamPropagation:
         # TODO: this should account for how phase shifts depend on
         # wavelength (i.e., dispersion).
         #
-        # For now, just return a copy: 
+        # For now, just return a copy:
         return density + 0*wavelength
 
     def _freespace_propagation(self, field, distance):
@@ -312,8 +360,9 @@ class BeamPropagation:
         return None
 
 ##############################################################################
-## The following utility functions are used for the demo code, they're
-## not critical to the module.
+## The following utility code is used for the demo in the 'main' block,
+## it's not critical to the module, and probably shouldn't be referenced
+## in your code when you import this module.
 ##############################################################################
 
 def to_tif(filename, x):
@@ -325,22 +374,71 @@ def to_tif(filename, x):
         x = np.expand_dims(x, axis=(0, 2))
     tf.imwrite(filename, x, imagej=True)
 
-def plane_wave_2d(coordinates, x0, y0, phi, theta, wavelength):
-    x, y, z = coordinates.xyz
-    sin, cos, pi = np.sin, np.cos, np.pi
-    k = 2*pi / wavelength
-    kx = k*sin(theta)*cos(phi)
-    ky = k*sin(theta)*sin(phi)
-    field = np.exp(1j*(kx*(x-x0) + ky*(y-y0)))
-    return field.squeeze()
-    
-def gaussian_beam_2d(coordinates, x0, y0, phi, theta, wavelength, w):
-    x, y, z = coordinates.xyz
-    r_sq = x**2 + y**2
-    phase = plane_wave_2d(coordinates, x0, y0, phi, theta, wavelength)
-    amplitude = np.exp(-r_sq / w**2)
-    field = phase * amplitude
-    return field.squeeze()
+def smooth(x):
+    from scipy import ndimage as ndi
+    return ndi.gaussian_filter(x, sigma=(0, 5, 5))
+
+def plot_loss_history(loss_history, filename):
+    import matplotlib.pyplot as plt
+    fig = plt.figure()
+    plt.plot(loss_history)
+    plt.savefig(filename)
+    plt.close(fig)
+    return None
+
+class TrainingData_for_2dImaging:
+    """An example of how to generate training data for an imaging optic.
+
+    This generates input/output pairs that image a pointlike source at
+    the 2d input plane to an inverted (but otherwise identical) image of
+    the input plane to the output plane.
+    """
+    def __init__(self, coordinates, radius):
+        assert isinstance(coordinates, Coordinates)
+        self.coordinates = coordinates
+        assert radius > 0
+        self.radius = radius
+        return None
+
+    def random_input_output_pair(self, wavelength):
+        x0, y0 = self.random_point_in_a_circle()
+        # Input beam is a focused point:
+        input_field = self.gaussian_beam_2d(
+            x0=x0, y0=y0, phi=0, theta=0,
+            wavelength=wavelength, w=0.7*wavelength)
+        # Desired output beam is an inverted image of the same point:
+        desired_field = self.gaussian_beam_2d(
+            x0=-x0, y0=-y0, phi=0, theta=0,
+            wavelength=wavelength, w=0.7*wavelength)
+        return input_field, desired_field
+
+    def random_point_in_a_circle(self):
+        # Local nicknames:
+        R, sin, cos, pi, sqrt = self.radius, np.sin, np.cos, np.pi, np.sqrt
+        rand = np.random.random_sample
+        # Simple math:
+        r, phi = R*sqrt(rand()), 2*pi*rand()
+        x, y = r*cos(phi), r*sin(phi)
+        return x, y
+
+    def plane_wave_2d(self, x0, y0, phi, theta, wavelength):
+        # Local nicknames:
+        x, y, z = self.coordinates.xyz
+        exp, sin, cos, pi = np.exp, np.sin, np.cos, np.pi
+        # Simple math:
+        k = 2*pi/wavelength
+        kx = k*sin(theta)*cos(phi)
+        ky = k*sin(theta)*sin(phi)
+        field = exp(1j*(kx*(x-x0) + ky*(y-y0)))
+        return field.squeeze()
+        
+    def gaussian_beam_2d(self, x0, y0, phi, theta, wavelength, w):
+        x, y, z = self.coordinates.xyz
+        r_sq = (x-x0)**2 + (y-y0)**2
+        phase = self.plane_wave_2d(x0, y0, phi, theta, wavelength)
+        amplitude = np.exp(-r_sq / w**2)
+        field = phase * amplitude
+        return field.squeeze()
 
 if __name__ == '__main__':
     main()
