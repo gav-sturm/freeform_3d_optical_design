@@ -51,7 +51,7 @@ def main():
 
     wavelength = 1
     loss_history = []
-    for iteration in range(10000):
+    for iteration in range(100000):
         # Use our data source to generate random input/output pairs:
         x0, y0 = data_source.random_point_in_a_circle()
         if iteration == 0: x0, y0 = 0, 0
@@ -392,6 +392,8 @@ def smooth(x):
     return ndi.gaussian_filter(x, sigma=(0, 5, 5))
 
 def plot_loss_history(loss_history, filename):
+    import matplotlib as mpl
+    mpl.use('agg') # Prevents a memory leak from repeated plotting
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     from scipy import ndimage as ndi
