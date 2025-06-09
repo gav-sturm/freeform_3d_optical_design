@@ -7,7 +7,7 @@ import torch # For calculating gradients
 # import tifffile 
 
 """
-v1.0.0
+v1.0.1
 
 Techniques for fabricating freeform 3D refractive optics are rapidly
 maturing. By 'freeform', I don't just mean the shape - I mean optics
@@ -126,7 +126,7 @@ def main():
             print("done.")
 
         # Update our 3D refractive object, using our calculated gradient:
-        step_size = 1
+        step_size = 10
         update = step_size * smooth(bp.gradient)
         bp.set_3d_density(bp.density - update)
 
@@ -238,16 +238,15 @@ class BeamPropagation:
         phase_mask       = torch.from_numpy(phase_mask)
         # `density` is the quantity we ultimately want to update via
         # gradient search, so we need `requires_grad`:
-        density          = torch.from_numpy(self.density)
-        density.requires_grad_(True)
-        phase_shifts     = self._density_to_phase_shifts(density, wavelength)
+        self._density_tensor = torch.from_numpy(self.density)
+        self._density_tensor.requires_grad_(True)
+        phase_shifts     = self._density_to_phase_shifts()
         # Iterate over the slices, fft, multiply, ifft, multiply.
         for i in range(nz):
             calculated_field[i+1, :, :] = (
                 amplitude_mask * exp(1j * phase_shifts[i, :, :]) *
                 ifft(fft(calculated_field[i, :, :]) * phase_mask))
         # Save results as attributes, not return values:
-        self._density_tensor          = density
         self._calculated_field_tensor = calculated_field
         self.calculated_field        = calculated_field.detach().numpy()
         self._invalidate(( # Remove these attributes, if they exist:
@@ -338,14 +337,27 @@ class BeamPropagation:
                           linear_taper(ny).reshape(ny, 1))
         return amplitude_mask
 
-    def _density_to_phase_shifts(self, density, wavelength):
-        # This function will likely be overridden by the user, keep it simple.
-        #
-        # TODO: this should account for how phase shifts depend on
-        # wavelength (i.e., dispersion).
-        #
-        # For now, just return a copy:
-        return density + 0*wavelength
+    def _density_to_phase_shifts(self):
+        """This function will likely be overridden by the user, keep it simple.
+
+        The point of this function is to account for how phase shifts
+        depend on wavelength (i.e., dispersion). You should override
+        this method (meaning, define your own version of it) in your
+        code.
+
+        When you're overriding this function, don't forget that phase
+        shifts depend on the voxel size in the z-direction and the
+        wavelength.
+        """
+        # Local nicknames:
+        dz, wavelength = self.coordinates.dz, self.wavelength # Scalars
+        density = self._density_tensor # This is a pytorch Tensor
+        
+        # The default material is nondispersive, meaning the phase
+        # shifts scale with dz and inversely with wavelength:
+        phase_shifts = dz * density / wavelength
+        
+        return phase_shifts # This is a pytorch Tensor (which allows autograd)
 
     def _freespace_propagation(self, field, distance):
         # Like 'calculate_3d_propagation()', but for a single step, with
