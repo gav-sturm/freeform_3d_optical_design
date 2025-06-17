@@ -139,9 +139,13 @@ def main():
 class BeamPropagation:
     """Simulate propagation of a light through a 3D refractive object.
     """
-    def __init__(self, coordinates):
+    def __init__(self, coordinates, try_cuda=True):
         assert isinstance(coordinates, Coordinates)
         self.coordinates = coordinates
+        assert try_cuda in (True, False)
+        self.device = torch.device('cpu')
+        if try_cuda and torch.cuda.is_available():
+            self.device = torch.device('cuda')
         return None
 
     def set_3d_density(self, density):
@@ -162,7 +166,7 @@ class BeamPropagation:
         nx, ny, nz = self.coordinates.n_xyz
         assert density.shape == (nz, ny, nx)
         assert np.isrealobj(density)
-        self.density = np.astype(density, 'float64', copy=True)
+        self.density = density.astype('float64', copy=True)
         self._invalidate(( # Remove these attributes, if they exist:
             '_density_tensor', '_calculated_field_tensor', 'calculated_field',
             'error_3d', '_loss_tensor', 'loss', 'gradient'))
@@ -222,33 +226,33 @@ class BeamPropagation:
         self._require('input_field', 'set_2d_input_field')
         self._require('wavelength', 'set_2d_input_field')
         self._require('density', 'set_3d_density')
-        nx, ny, nz = self.coordinates.n_xyz
-        dx, dy, dz = self.coordinates.d_xyz
-        input_field, wavelength = self.input_field, self.wavelength
         # How do amplitude and phase change from one slice to the next?
+        # Regardless of the object, we want to propagate "between"
+        # slices in a homogenous medium with absorbing boundary
+        # conditions:
         amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
-        phase_mask     = self._propagation_phase_mask(dz)
-        # Store the calculated 3D field:
-        calculated_field = np.zeros((nz+1, ny, nx), dtype='complex128')
-        calculated_field[0, :, :] = input_field
-        # Use Torch operations in case we want to calculate gradients:
-        fft, ifft, exp   = torch.fft.fftn, torch.fft.ifftn, torch.exp
-        calculated_field = torch.from_numpy(calculated_field)
-        amplitude_mask   = torch.from_numpy(amplitude_mask)
-        phase_mask       = torch.from_numpy(phase_mask)
-        # `density` is the quantity we ultimately want to update via
-        # gradient search, so we need `requires_grad`:
-        self._density_tensor = torch.from_numpy(self.density)
-        self._density_tensor.requires_grad_(True)
-        phase_shifts     = self._density_to_phase_shifts()
-        # Iterate over the slices, fft, multiply, ifft, multiply.
-        for i in range(nz):
-            calculated_field[i+1, :, :] = (
-                amplitude_mask * exp(1j * phase_shifts[i, :, :]) *
-                ifft(fft(calculated_field[i, :, :]) * phase_mask))
+        phase_mask     = self._propagation_phase_mask(self.coordinates.dz)
+        # Use Torch tensors so we can calculate gradients:
+        fft, ifft, exp = torch.fft.fftn, torch.fft.ifftn, torch.exp
+        amplitude_mask = self._to_torch(amplitude_mask)
+        phase_mask     = self._to_torch(phase_mask)
+        input_field    = self._to_torch(self.input_field)
+        self._density_tensor = self._to_torch(self.density) # List of 2D tensors
+        # Propagate the light through the object, one slice at a time:
+        calculated_field = [input_field]
+        for d in self._density_tensor:
+            # The density is the quantity we ultimately want to update
+            # via gradient search, so it `requires_grad`:
+            d.requires_grad_(True)
+            # Convert the density to phase shifts:
+            phase_shifts = self._density_to_phase_shifts(d)
+            # fft, multiply, ifft, multiply:
+            calculated_field.append(
+                amplitude_mask * exp(1j * phase_shifts) *
+                ifft(phase_mask * fft(calculated_field[-1])))
         # Save results as attributes, not return values:
-        self._calculated_field_tensor = calculated_field
-        self.calculated_field        = calculated_field.detach().numpy()
+        self._calculated_field_tensor = calculated_field # List of 2D tensors
+        self.calculated_field = self._to_numpy(calculated_field) # 3D array
         self._invalidate(( # Remove these attributes, if they exist:
             'error_3d', '_loss_tensor', 'loss', 'gradient'))
         return None
@@ -262,36 +266,36 @@ class BeamPropagation:
         self._require('desired_field', 'set_2d_desired_output_field')
         self._require('_calculated_field_tensor', 'calculate_3d_field')
         # We want gradients, so we'll calculate our loss using Torch:
-        desired_output = torch.from_numpy(self.desired_field)
-        calculated_output = self._calculated_field_tensor[-1, :, :]
+        desired_output = self._to_torch(self.desired_field)
+        calculated_output = self._calculated_field_tensor[-1]
         # Since our fields are complex, we have to decide how to
         # penalize both intensity and phase errors. My favorite way to
         # do this is to simulate propagation in free space for both the
         # calculated and the desired fields, and compare the intensity
         # mismatch at multiple different z-planes:
-        desired_output_3d    = [desired_output]
-        calculated_output_3d = [calculated_output]
+        desired_output_3d    = [desired_output]    # List of 2D tensors
+        calculated_output_3d = [calculated_output] # List of 2D tensors
         for dz in z_planes:
             d_at_dz = self._freespace_propagation(desired_output,    dz)
             c_at_dz = self._freespace_propagation(calculated_output, dz)
             desired_output_3d.append(   d_at_dz)
             calculated_output_3d.append(c_at_dz)
 
-        loss = torch.zeros(1)
+        loss = torch.zeros(1, device=self.device)
         error_3d = [] # Useful for visualization
         for d, c in zip(desired_output_3d, calculated_output_3d):
             desired_intensity    = d.abs()**2
             calculated_intensity = c.abs()**2
             intensity_error = (calculated_intensity - desired_intensity)
-            error_3d.append(intensity_error.detach().clone().numpy())
+            error_3d.append(intensity_error)
             worst_case_intensity_error = (desired_intensity +
                                           calculated_intensity).sum()
             loss += intensity_error.abs().sum() / worst_case_intensity_error
         loss = loss / (len(z_planes) + 1)
         # Save our results as attributes, not return values:
-        self.error_3d = np.array(error_3d)
+        self.error_3d = self._to_numpy(error_3d)
         self._loss_tensor = loss
-        self.loss = loss.detach().numpy()[0]
+        self.loss = self._to_numpy(loss)[0]
         self._invalidate(('gradient',)) # Remove this attribute, if it exists.
         return None
 
@@ -299,8 +303,7 @@ class BeamPropagation:
         self._require('_loss_tensor', 'calculate_loss')
         self._require('_density_tensor', 'calculate_3d_field')
         self._loss_tensor.backward()
-        gradient_tensor = self._density_tensor.grad
-        self.gradient = gradient_tensor.numpy()
+        self.gradient = self._to_numpy([d.grad for d in self._density_tensor])
         return None
 
     def _propagation_phase_mask(self, distance):
@@ -337,7 +340,7 @@ class BeamPropagation:
                           linear_taper(ny).reshape(ny, 1))
         return amplitude_mask
 
-    def _density_to_phase_shifts(self):
+    def _density_to_phase_shifts(self, density):
         """This function will likely be overridden by the user, keep it simple.
 
         The point of this function is to account for how phase shifts
@@ -349,9 +352,10 @@ class BeamPropagation:
         shifts depend on the voxel size in the z-direction and the
         wavelength.
         """
+        # `density` must be a tensor, to allow autograd:
+        assert isinstance(density, torch.Tensor)
         # Local nicknames:
         dz, wavelength = self.coordinates.dz, self.wavelength # Scalars
-        density = self._density_tensor # This is a pytorch Tensor
         
         # The default material is nondispersive, meaning the phase
         # shifts scale with dz and inversely with wavelength:
@@ -371,9 +375,9 @@ class BeamPropagation:
             fft, ifft = np.fft.fftn, np.fft.ifftn
         elif isinstance(field, torch.Tensor): # Torch input, return a tensor
             assert torch.is_complex(field)
-            phase_mask = torch.from_numpy(phase_mask)
+            phase_mask = self._to_torch(phase_mask)
             fft, ifft = torch.fft.fftn, torch.fft.ifftn
-        field_after_propagation = ifft(fft(field) * phase_mask)
+        field_after_propagation = ifft(phase_mask * fft(field))
         return field_after_propagation
 
     def _invalidate(self, iterable_of_attribute_names):
@@ -395,6 +399,34 @@ class BeamPropagation:
                     attribute_name, prerequisite_function_name))
         return None
 
+    def _to_torch(self, x):
+        """We convert 2D numpy arrays directly to 2D tensors, but we
+        convert 3D numpy arrays to lists of 2D tensors rather than a 3D
+        tensor, to avoid quadratic complexity during backpropagation.
+        """
+        assert x.ndim in (2, 3)
+        if x.ndim == 2:
+            return torch.from_numpy(x).to(self.device)
+        elif x.ndim == 3:
+            return [torch.from_numpy(x[i, :, :]).to(self.device)
+                    for i in range(x.shape[0])]
+
+    def _to_numpy(self, x):
+        if isinstance(x, torch.Tensor): # Convert directly to a 2D array
+            assert x.ndim in (1, 2)
+            return x.cpu().detach().numpy()
+        elif isinstance(x, list): # Convert to a 3D numpy array
+            # This is kinda janky but seems correct at least.
+            x0 = x[0].cpu().detach().numpy()
+            nz = len(x)
+            ny, nx = x0.shape
+            out = np.zeros((nz, ny, nx), dtype=x0.dtype)
+            out[0, :, :] = x0
+            for i in range(1, nz):
+                out[i, :, :] = x[i].cpu().detach().numpy()
+            return out
+
+            
 class Coordinates:
     """A convenience class for keeping track of the coordinates of our voxels.
 
