@@ -354,12 +354,12 @@ class BeamPropagation:
         """
         # `density` must be a tensor, to allow autograd:
         assert isinstance(density, torch.Tensor)
-        # Local nicknames:
-        dz, wavelength = self.coordinates.dz, self.wavelength # Scalars
+        # Local nicknames for the scalars:
+        dz, wavelength, pi = self.coordinates.dz, self.wavelength, np.pi
         
         # The default material is nondispersive, meaning the phase
         # shifts scale with dz and inversely with wavelength:
-        phase_shifts = dz * density / wavelength
+        phase_shifts = 2*pi * dz * density / wavelength
         
         return phase_shifts # This is a pytorch Tensor (which allows autograd)
 
