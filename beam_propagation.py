@@ -7,7 +7,7 @@ import torch # For calculating gradients
 # import tifffile 
 
 """
-v1.0.2
+v1.0.3
 
 Techniques for fabricating freeform 3D refractive optics are rapidly
 maturing. By 'freeform', I don't just mean the shape - I mean optics
@@ -70,6 +70,11 @@ def main():
     # that will simulate how light changes as it passes through our
     # refractive object:
     bp = BeamPropagation(coords)
+
+    # Each voxel of our refractive index is a mixture of materials:
+    air     = FixedIndexMaterial(1)
+    polymer = FixedIndexMaterial(1.5)
+    bp.set_materials((air, polymer))
 
     # Initialize our object.
     try: # If there's an object saved to disk, pick up where we left off:
@@ -148,21 +153,54 @@ class BeamPropagation:
             self.device = torch.device('cuda')
         return None
 
+    def set_materials(self, material_list):
+        """What materials are we mixing to control the index of refraction?
+
+        The index of refraction at each voxel is the weighted average of
+        two (or more) materials, our 'base' material, and our
+        'mixer(s)'. Use this function to specify those materials.
+
+        For real materials, the index of refraction depends on the
+        wavelength, and you probably want to use a SellmeierMaterial
+        object. For example, if each voxel was a mixture of air and
+        fused silica, we could write:
+        
+            air = SellemeierMaterial(
+                B=(0.05792105, 0.00167917),
+                C=(238.0185, 57.362))
+            fused_silica = SellmeierMaterial(
+                B=(0.6961663, 0.4079426, 0.8974794),
+                C=(0.004679148, 0.01351206, 97.934))
+            material_list = [air, fused_silica]
+
+        For simpler simulations that neglect dispersion, you could use a
+        fictitious but convenient FixedIndexMaterial:
+
+            air =          FixedIndexMaterial(1)
+            fused_silica = FixedIndexMaterial(1.46)
+            material_list = [air, fused_silica]
+        """
+        # For now, we only allow binary mixtures:
+        assert len(material_list) == 2
+        for m in material_list:
+            assert hasattr(m, 'get_index')
+        self.material_list = material_list
+        self._invalidate(( # Remove these attributes, if they exist:
+            'density', '_density_tensor', '_calculated_field_tensor',
+            'calculated_field', 'error_3d', '_loss_tensor', 'loss', 'gradient'))
+        return None
+
     def set_3d_density(self, density):
         """`density` is a 3D numpy array describing our refractive object.
 
-        The propagation simulation wants to know phase shifts at each
-        voxel due to our refractive object, which depends on the
-        `density` at each voxel, the size of the voxel, and the
-        wavelength of the propagating light. The relationship between
-        `density`, wavelength, voxel size, and phase shift is defined in
-        the `_density_to_phase_shifts()` method of this object. You
-        should override that method (meaning, redefine it in your code)
-        if you want to simulate polychromatic optics.
+        A density of 0 corresponds to a voxel that's entirely the 'base'
+        material. A density of 1 corresponds to a voxel that's entirely
+        the 'mixer' material.
 
         Our current beam propagation model is only accurate if `density`
         is very smoothly varying, so caveat emptor.
         """
+        self._require('material_list', 'set_materials')
         nx, ny, nz = self.coordinates.n_xyz
         assert density.shape == (nz, ny, nx)
         assert np.isrealobj(density)
@@ -180,17 +218,23 @@ class BeamPropagation:
         the input plane of our refractive object.
 
         `wavelength` is a positive number in the same units as our
-        Coordinates object (e.g. microns). It'll be used to calculate
-        how the light spreads out as it propagates through each layer of
-        our refractive object, and also used to convert density to phase
-        shifts.
+        Coordinates object (e.g. microns). Note that we're specifying
+        the wavelength of light our input field in *vacuum*, not in our
+        base material. This is used to calculate how the light spreads
+        out as it propagates through each layer of our refractive
+        object, and also used to convert density to index of refraction.
+
+        If you're simulating dispersion using a SellmeierMaterial, then
+        the units of `wavelength` need to be microns.
         """
+        self._require('material_list', 'set_materials')
         nx, ny, nz = self.coordinates.n_xyz
         assert input_field.shape == (ny, nx)
         assert input_field.dtype == 'complex128'
         assert wavelength > 0
         self.input_field = input_field
         self.wavelength = wavelength
+        self.index_list = [m.get_index(wavelength) for m in self.material_list]
         self._invalidate(( # Remove these attributes, if they exist:
             'desired_field', '_calculated_field_tensor', 'calculated_field',
             'error_3d', '_loss_tensor', 'loss', 'gradient'))
@@ -341,25 +385,27 @@ class BeamPropagation:
         return amplitude_mask
 
     def _density_to_phase_shifts(self, density):
-        """This function will likely be overridden by the user, keep it simple.
+        """Convert our `density` tensor to phase shifts at each voxel.
 
-        The point of this function is to account for how phase shifts
-        depend on wavelength (i.e., dispersion). You should override
-        this method (meaning, define your own version of it) in your
-        code.
-
-        When you're overriding this function, don't forget that phase
-        shifts depend on the voxel size in the z-direction and the
-        wavelength.
+        The propagation simulation wants to know phase shifts at each
+        voxel due to our refractive object, which depends on the
+        `density` at each voxel, the materials that we're mixing, the
+        size of the voxel, and the wavelength of the propagating light.
         """
         # `density` must be a tensor, to allow autograd:
         assert isinstance(density, torch.Tensor)
         # Local nicknames for the scalars:
         dz, wavelength, pi = self.coordinates.dz, self.wavelength, np.pi
+
+        # The index of refraction is a weighted average of our
+        # materials. For now, we only implement binary mixtures:
+        assert len(self.index_list) == 2
+        index_1, index_2 = self.index_list
+        index_minus_1 = (index_1 - 1) + (index_2 - index_1)*density
         
         # The default material is nondispersive, meaning the phase
         # shifts scale with dz and inversely with wavelength:
-        phase_shifts = 2*pi * dz * density / wavelength
+        phase_shifts = 2*pi * dz * index_minus_1 / wavelength
         
         return phase_shifts # This is a pytorch Tensor (which allows autograd)
 
@@ -426,6 +472,46 @@ class BeamPropagation:
                 out[i, :, :] = x[i].cpu().detach().numpy()
             return out
 
+class SellmeieirMaterial:
+    """The Sellmeier equation is an empirical relationship between
+    refractive index and wavelength for a particular transparent medium.
+
+    https://en.wikipedia.org/wiki/Sellmeier_equation
+    """
+    def __init__(self, B=(0, 0, 0), C=(0, 0, 0)):
+        """Three terms is typical (one per resonance), but we might as
+        well allow any number of resonances.
+        """
+        assert len(B) == len(C)
+        B = [float(x) for x in B]
+        C = [float(x) for x in C]
+        self.B = B
+        self.C = C
+        return None
+
+    def get_index(self, wavelength_um):
+        lamda_sq = wavelength_um**2
+        index_sq = 1
+        for b, c in zip(self.B, self.C):
+            index_sq += b * lamda_sq / (lamda_sq - c)
+        index = np.sqrt(index_sq)
+        return index
+
+class FixedIndexMaterial:
+    """A conceptually simple material with no dispersion.
+
+    In real life, the index of refraction for a material depends on the
+    wavelength. However, sometimes it's nice to simulate simple things,
+    so here's a (fictitious) material that has the same index of
+    refraction for all wavelengths.
+    """
+    def __init__(self, index):
+        index = float(index)
+        self.index = index
+        return None
+
+    def get_index(self, wavelength_um):
+        return self.index
             
 class Coordinates:
     """A convenience class for keeping track of the coordinates of our voxels.
