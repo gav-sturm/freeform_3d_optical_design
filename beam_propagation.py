@@ -165,7 +165,7 @@ class BeamPropagation:
         object. For example, if each voxel was a mixture of air and
         fused silica, we could write:
         
-            air = SellemeierMaterial(
+            air = SellmeierMaterial(
                 B=(0.05792105, 0.00167917),
                 C=(238.0185, 57.362))
             fused_silica = SellmeierMaterial(
@@ -472,7 +472,7 @@ class BeamPropagation:
                 out[i, :, :] = x[i].cpu().detach().numpy()
             return out
 
-class SellmeieirMaterial:
+class SellmeierMaterial:
     """The Sellmeier equation is an empirical relationship between
     refractive index and wavelength for a particular transparent medium.
 
