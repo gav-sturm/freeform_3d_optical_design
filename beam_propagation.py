@@ -78,19 +78,12 @@ def main():
 
     # Initialize our object.
     try: # If there's an object saved to disk, pick up where we left off:
-        initial_density = from_tif('1_density.tif')
+        initial_concentration = from_tif('1_concentration.tif')
     except FileNotFoundError:
-        # If not, initialize either an empty array or a simple
-        # pseudoparabolic GRIN lens:
-        print("Using default initial density.")
+        print("Using default initial concentration.")
         nx, ny, nz = coords.n_xyz
-        x,   y,  z = coords.xyz
-        r = np.sqrt(x**2 + y**2)
-        initial_density = np.zeros((nz, ny, nx))
-        # If you want to initialize with a pretty good initial guess,
-        # uncomment this line:
-        ##initial_density[:, :, :] = 0.45 / (np.cosh(0.2*r)**2)
-    bp.set_3d_density(initial_density)
+        initial_concentration = 0.5*np.ones((nz, ny, nx))
+    bp.set_3d_concentration(initial_concentration)
 
     # Make a source to generate training data. In this case, the
     # training data is for a simple plane-to-plane inverting imaging
@@ -121,7 +114,8 @@ def main():
         loss_history.append((x0, y0, bp.loss))
         if iteration % 10 == 0:
             print("Saving TIFs etc...", end='')
-            to_tif('1_density.tif', bp.density)
+            to_tif('0_composition.tif', bp.composition)
+            to_tif('1_concentration.tif', bp.concentration)
             to_tif('2_input_field.tif', bp.input_field)
             to_tif('3_desired_field.tif', bp.desired_field)
             to_tif('4_calculated_field.tif', np.abs(bp.calculated_field))
@@ -131,9 +125,9 @@ def main():
             print("done.")
 
         # Update our 3D refractive object, using our calculated gradient:
-        step_size = 10
+        step_size = 100
         update = step_size * smooth(bp.gradient)
-        bp.set_3d_density(bp.density - update)
+        bp.set_3d_composition(bp.composition - update)
 
 ##############################################################################
 ## The following blocks of code are the heart of the module. You should
@@ -186,28 +180,43 @@ class BeamPropagation:
             assert hasattr(m, 'get_index')
         self.material_list = material_list
         self._invalidate(( # Remove these attributes, if they exist:
-            'density', '_density_tensor', '_calculated_field_tensor',
-            'calculated_field', 'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'composition', '_composition_tensor', 'concentration'
+            '_calculated_field_tensor', 'calculated_field',
+            'error_3d', '_loss_tensor', 'loss', 'gradient'))
         return None
 
-    def set_3d_density(self, density):
-        """`density` is a 3D numpy array describing our refractive object.
+    def set_3d_concentration(self, concentration):
+        """`concentration` is a 3D numpy array describing our refractive object.
 
-        A density of 0 corresponds to a voxel that's entirely the 'base'
-        material. A density of 1 corresponds to a voxel that's entirely
-        the 'mixer' material.
+        A concentration of 0 corresponds to a voxel that's entirely the
+        'base' material. A concentration of 1 corresponds to a voxel
+        that's entirely the 'mixer' material.
+        """
+        # This function is just for convenience; the business logic is
+        # in other functions:
+        composition = _to_composition(concentration)
+        self.set_3d_composition(composition)
+        return None
 
-        Our current beam propagation model is only accurate if `density`
-        is very smoothly varying, so caveat emptor.
+    def set_3d_composition(self, composition):
+        """`composition` is a 3D numpy array describing our refractive object.
+
+        A composition of -inf corresponds to a voxel that's entirely the
+        'base' material. A composition of 1 corresponds to a voxel
+        that's entirely the 'mixer' material.
+
+        Our current beam propagation model is only accurate if
+        `composition` is very smoothly varying, so caveat emptor.
         """
         self._require('material_list', 'set_materials')
         nx, ny, nz = self.coordinates.n_xyz
-        assert density.shape == (nz, ny, nx)
-        assert np.isrealobj(density)
-        self.density = density.astype('float64', copy=True)
+        assert composition.shape == (nz, ny, nx)
+        assert np.isrealobj(composition)
+        self.composition = composition.astype('float64', copy=True)
+        self.concentration = _to_concentration(self.composition)
         self._invalidate(( # Remove these attributes, if they exist:
-            '_density_tensor', '_calculated_field_tensor', 'calculated_field',
-            'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            '_composition_tensor', '_calculated_field_tensor',
+            'calculated_field', 'error_3d', '_loss_tensor', 'loss', 'gradient'))
         return None
 
     def set_2d_input_field(self, input_field, wavelength):
@@ -222,7 +231,7 @@ class BeamPropagation:
         the wavelength of light our input field in *vacuum*, not in our
         base material. This is used to calculate how the light spreads
         out as it propagates through each layer of our refractive
-        object, and also used to convert density to index of refraction.
+        object, and also used to convert composition to index of refraction.
 
         If you're simulating dispersion using a SellmeierMaterial, then
         the units of `wavelength` need to be microns.
@@ -269,7 +278,7 @@ class BeamPropagation:
         """
         self._require('input_field', 'set_2d_input_field')
         self._require('wavelength', 'set_2d_input_field')
-        self._require('density', 'set_3d_density')
+        self._require('composition', 'set_3d_composition')
         # How do amplitude and phase change from one slice to the next?
         # Regardless of the object, we want to propagate "between"
         # slices in a homogenous medium with absorbing boundary
@@ -281,15 +290,16 @@ class BeamPropagation:
         amplitude_mask = self._to_torch(amplitude_mask)
         phase_mask     = self._to_torch(phase_mask)
         input_field    = self._to_torch(self.input_field)
-        self._density_tensor = self._to_torch(self.density) # List of 2D tensors
+        # This is a list of 2D tensors, not a 3D tensor like you might expect:
+        self._composition_tensor = self._to_torch(self.composition) 
         # Propagate the light through the object, one slice at a time:
         calculated_field = [input_field]
-        for d in self._density_tensor:
-            # The density is the quantity we ultimately want to update
-            # via gradient search, so it `requires_grad`:
-            d.requires_grad_(True)
-            # Convert the density to phase shifts:
-            phase_shifts = self._density_to_phase_shifts(d)
+        for c in self._composition_tensor:
+            # The composition is the quantity we ultimately want to
+            # update via gradient search, so it `requires_grad`:
+            c.requires_grad_(True)
+            # Convert the composition to phase shifts:
+            phase_shifts = self._composition_to_phase_shifts(c)
             # fft, multiply, ifft, multiply:
             calculated_field.append(
                 amplitude_mask * exp(1j * phase_shifts) *
@@ -345,9 +355,10 @@ class BeamPropagation:
 
     def calculate_gradient(self):
         self._require('_loss_tensor', 'calculate_loss')
-        self._require('_density_tensor', 'calculate_3d_field')
+        self._require('_composition_tensor', 'calculate_3d_field')
         self._loss_tensor.backward()
-        self.gradient = self._to_numpy([d.grad for d in self._density_tensor])
+        self.gradient = self._to_numpy(
+            [c.grad for c in self._composition_tensor])
         return None
 
     def _propagation_phase_mask(self, distance):
@@ -384,24 +395,25 @@ class BeamPropagation:
                           linear_taper(ny).reshape(ny, 1))
         return amplitude_mask
 
-    def _density_to_phase_shifts(self, density):
-        """Convert our `density` tensor to phase shifts at each voxel.
+    def _composition_to_phase_shifts(self, composition):
+        """Convert our `composition` tensor to phase shifts at each voxel.
 
         The propagation simulation wants to know phase shifts at each
         voxel due to our refractive object, which depends on the
-        `density` at each voxel, the materials that we're mixing, the
+        `composition` at each voxel, the materials that we're mixing, the
         size of the voxel, and the wavelength of the propagating light.
         """
-        # `density` must be a tensor, to allow autograd:
-        assert isinstance(density, torch.Tensor)
+        # `composition` must be a tensor, to allow autograd:
+        assert isinstance(composition, torch.Tensor)
         # Local nicknames for the scalars:
         dz, wavelength, pi = self.coordinates.dz, self.wavelength, np.pi
 
         # The index of refraction is a weighted average of our
         # materials. For now, we only implement binary mixtures:
+        concentration = _to_concentration(composition)
         assert len(self.index_list) == 2
         index_1, index_2 = self.index_list
-        index_minus_1 = (index_1 - 1) + (index_2 - index_1)*density
+        index_minus_1 = (index_1 - 1) + (index_2 - index_1)*concentration
         
         # The default material is nondispersive, meaning the phase
         # shifts scale with dz and inversely with wavelength:
@@ -471,6 +483,46 @@ class BeamPropagation:
             for i in range(1, nz):
                 out[i, :, :] = x[i].cpu().detach().numpy()
             return out
+
+def _to_concentration(composition):
+    """`concentration` is a 3D numpy array describing our refractive object.
+
+    A concentration of 0 corresponds to a voxel that's entirely the
+    'base' material. A concentration of 1 corresponds to a voxel that's
+    entirely the 'mixer' material.
+
+    `concentration` is nice for human interpretation, but inconvenient
+    for gradient search, since a concentration outside the range (0, 1)
+    isn't possible, but gradient search will explore outside this range.
+    """
+    if isinstance(composition, torch.Tensor):
+        arctan = torch.arctan
+    elif isinstance(composition, np.ndarray):
+        arctan = np.arctan
+    # Since -pi/2 < arctan < pi/2, this guarantees 0 < concentration < 1
+    concentration = 0.5 + arctan(composition) / np.pi
+    return concentration
+
+def _to_composition(concentration):
+    """`composition` is a 3D numpy array describing our refractive object.
+
+    A composition of -inf corresponds to a voxel that's entirely the
+    'base' material. A composition of +inf corresponds to a voxel that's
+    entirely the 'mixer' material.
+
+    `composition` is nice for gradient search, but inconvenient
+    for human interpretation.
+    """
+    if isinstance(concentration, torch.Tensor):
+        tan, clip = torch.tan, torch.clip
+    elif isinstance(concentration, np.ndarray):
+        tan, clip = np.tan, np.clip
+    # We enforce 0 < concentration < 1, which guarantees finite values
+    # for `composition`:
+    eps = 1e-6
+    concentration = clip(concentration, eps, 1-eps)
+    composition = tan(np.pi*(concentration - 0.5))
+    return composition
 
 class SellmeierMaterial:
     """The Sellmeier equation is an empirical relationship between
