@@ -71,7 +71,7 @@ def main():
     # refractive object:
     bp = BeamPropagation(coords)
 
-    # Each voxel of our refractive index is a mixture of materials:
+    # Each voxel of our refractive object is a mixture of materials:
     air     = FixedIndexMaterial(1)
     polymer = FixedIndexMaterial(1.5)
     bp.set_materials((air, polymer))
