@@ -628,7 +628,7 @@ def from_tif(filename):
 
 def smooth(x):
     from scipy import ndimage as ndi
-    return ndi.gaussian_filter(x, sigma=(0, 5, 5))
+    return ndi.gaussian_filter(x, sigma=(2, 5, 5))
 
 def plot_loss_history(loss_history, filename):
     import matplotlib as mpl
@@ -640,7 +640,7 @@ def plot_loss_history(loss_history, filename):
     loss_history = np.asarray(loss_history)
     x0, y0, loss = loss_history.T
     r = np.sqrt(x0**2 + y0**2)
-    smooth_loss = ndi.gaussian_filter(loss, sigma=10)
+    smooth_loss = ndi.gaussian_filter(loss, sigma=30)
     fig = plt.figure()
     plt.scatter(range(len(loss)), loss, s=7, c=r)
     plt.plot(smooth_loss)
