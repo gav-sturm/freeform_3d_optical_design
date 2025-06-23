@@ -7,7 +7,7 @@ import torch # For calculating gradients
 # import tifffile 
 
 """
-v1.0.3
+v1.0.4
 
 Techniques for fabricating freeform 3D refractive optics are rapidly
 maturing. By 'freeform', I don't just mean the shape - I mean optics
