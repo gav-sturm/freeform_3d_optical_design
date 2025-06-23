@@ -79,7 +79,7 @@ def main():
     # Initialize our object.
     try: # If there's an object saved to disk, pick up where we left off:
         initial_concentration = from_tif('1_concentration.tif')
-    except FileNotFoundError:
+    except FileNotFoundError: # Otherwise, use a 50/50 mixture at each voxel:
         print("Using default initial concentration.")
         nx, ny, nz = coords.n_xyz
         initial_concentration = 0.5*np.ones((nz, ny, nx))
@@ -97,10 +97,10 @@ def main():
         # Use our data source to generate random input/output pairs:
         x0, y0 = data_source.random_point_in_a_circle()
         if iteration == 0: x0, y0 = 0, 0
-        input_field, desired_field = data_source.input_output_pair(
+        input_field, desired_output_field = data_source.input_output_pair(
             x0, y0, wavelength, divergence_angle_degrees)
         bp.set_2d_input_field(input_field, wavelength)
-        bp.set_2d_desired_output_field(desired_field)
+        bp.set_2d_desired_output_field(desired_output_field)
 
         # Simulate propagation through our 3D refractive object,
         # calculate loss, and calculate a gradient that hopefully will
@@ -117,7 +117,7 @@ def main():
             to_tif('0_composition.tif', bp.composition)
             to_tif('1_concentration.tif', bp.concentration)
             to_tif('2_input_field.tif', bp.input_field)
-            to_tif('3_desired_field.tif', bp.desired_field)
+            to_tif('3_desired_output_field.tif', bp.desired_output_field)
             to_tif('4_calculated_field.tif', np.abs(bp.calculated_field))
             to_tif('5_error.tif', bp.error_3d)
             to_tif('6_gradient.tif', bp.gradient)
@@ -245,14 +245,14 @@ class BeamPropagation:
         self.wavelength = wavelength
         self.index_list = [m.get_index(wavelength) for m in self.material_list]
         self._invalidate(( # Remove these attributes, if they exist:
-            'desired_field', '_calculated_field_tensor', 'calculated_field',
-            'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'desired_output_field', '_calculated_field_tensor',
+            'calculated_field', 'error_3d', '_loss_tensor', 'loss', 'gradient'))
         return None
 
-    def set_2d_desired_output_field(self, desired_field):
+    def set_2d_desired_output_field(self, desired_output_field):
         """What light do we wish would exit our refractive object?
 
-        `desired_field` is a 2D numpy array of complex numbers,
+        `desired_output_field` is a 2D numpy array of complex numbers,
         specifying the amplitude and phase of the light vs. 2D position
         that we WISH would be produced at the output plane of our
         refractive object. We use this to calculate loss (aggregate
@@ -263,9 +263,9 @@ class BeamPropagation:
         self._require('input_field', 'set_2d_input_field')
         self._require('wavelength', 'set_2d_input_field')
         nx, ny, nz = self.coordinates.n_xyz
-        assert desired_field.shape == (ny, nx)
-        assert desired_field.dtype == 'complex128'
-        self.desired_field = desired_field
+        assert desired_output_field.shape == (ny, nx)
+        assert desired_output_field.dtype == 'complex128'
+        self.desired_output_field = desired_output_field
         self._invalidate(( # Remove these attributes, if they exist:
             'error_3d', '_loss_tensor', 'loss', 'gradient'))
         return None
@@ -317,27 +317,28 @@ class BeamPropagation:
         This function doesn't return a value; it populates the
         attributes `loss`, `_loss_tensor`, and `error_3d`.
         """
-        self._require('desired_field', 'set_2d_desired_output_field')
+        self._require('desired_output_field', 'set_2d_desired_output_field')
         self._require('_calculated_field_tensor', 'calculate_3d_field')
         # We want gradients, so we'll calculate our loss using Torch:
-        desired_output = self._to_torch(self.desired_field)
-        calculated_output = self._calculated_field_tensor[-1]
+        desired_output_field = self._to_torch(self.desired_output_field)
+        calculated_output_field = self._calculated_field_tensor[-1]
         # Since our fields are complex, we have to decide how to
         # penalize both intensity and phase errors. My favorite way to
         # do this is to simulate propagation in free space for both the
         # calculated and the desired fields, and compare the intensity
-        # mismatch at multiple different z-planes:
-        desired_output_3d    = [desired_output]    # List of 2D tensors
-        calculated_output_3d = [calculated_output] # List of 2D tensors
+        # mismatch at multiple different z-planes.
+        # These are lists of 2D tensors:
+        desired_output_field_3d    = [desired_output_field]
+        calculated_output_field_3d = [calculated_output_field]
         for dz in z_planes:
-            d_at_dz = self._freespace_propagation(desired_output,    dz)
-            c_at_dz = self._freespace_propagation(calculated_output, dz)
-            desired_output_3d.append(   d_at_dz)
-            calculated_output_3d.append(c_at_dz)
+            d_at_dz = self._freespace_propagation(desired_output_field,    dz)
+            c_at_dz = self._freespace_propagation(calculated_output_field, dz)
+            desired_output_field_3d.append(   d_at_dz)
+            calculated_output_field_3d.append(c_at_dz)
 
         loss = torch.zeros(1, device=self.device)
         error_3d = [] # Useful for visualization
-        for d, c in zip(desired_output_3d, calculated_output_3d):
+        for d, c in zip(desired_output_field_3d, calculated_output_field_3d):
             desired_intensity    = d.abs()**2
             calculated_intensity = c.abs()**2
             intensity_error = (calculated_intensity - desired_intensity)
@@ -694,8 +695,8 @@ class TrainingData_for_2dImaging:
             x=x, y=y, x0=x0, y0=y0, phi=phi, theta=theta,
             wavelength=wavelength, w=w)
         # Desired output beam is an inverted image of the same point:
-        desired_field = input_field[::-1, ::-1].copy()
-        return input_field, desired_field
+        desired_output_field = input_field[::-1, ::-1].copy()
+        return input_field, desired_output_field
         
 def gaussian_beam_2d(x, y, x0, y0, phi, theta, wavelength, w):
     # Local nicknames:
