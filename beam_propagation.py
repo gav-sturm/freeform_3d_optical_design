@@ -119,9 +119,13 @@ def main():
             to_tif('2_input_field.tif', bp.input_field)
             to_tif('3_desired_output_field.tif', bp.desired_output_field)
             to_tif('4_calculated_field.tif', np.abs(bp.calculated_field))
-            to_tif('5_error.tif', bp.error_3d)
-            to_tif('6_gradient.tif', bp.gradient)
-            plot_loss_history(loss_history, '7_loss_history.png')
+            to_tif('5_desired_output_field_3d',
+                   np.abs(bp.desired_output_field_3d))
+            to_tif('6_calculated_output_field_3d',
+                   np.abs(bp.calculated_output_field_3d))
+            to_tif('7_error.tif', bp.error_3d)
+            to_tif('8_gradient.tif', bp.gradient)
+            plot_loss_history(loss_history, '9_loss_history.png')
             print("done.")
 
         # Update our 3D refractive object, using our calculated gradient:
@@ -182,7 +186,8 @@ class BeamPropagation:
         self._invalidate(( # Remove these attributes, if they exist:
             'composition', '_composition_tensor', 'concentration'
             '_calculated_field_tensor', 'calculated_field',
-            'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'calculated_output_field_3d', 'error_3d',
+            '_loss_tensor', 'loss', 'gradient'))
         return None
 
     def set_3d_concentration(self, concentration):
@@ -216,7 +221,8 @@ class BeamPropagation:
         self.concentration = _to_concentration(self.composition)
         self._invalidate(( # Remove these attributes, if they exist:
             '_composition_tensor', '_calculated_field_tensor',
-            'calculated_field', 'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'calculated_field', 'calculated_output_field_3d', 'error_3d',
+            '_loss_tensor', 'loss', 'gradient'))
         return None
 
     def set_2d_input_field(self, input_field, wavelength):
@@ -245,8 +251,10 @@ class BeamPropagation:
         self.wavelength = wavelength
         self.index_list = [m.get_index(wavelength) for m in self.material_list]
         self._invalidate(( # Remove these attributes, if they exist:
-            'desired_output_field', '_calculated_field_tensor',
-            'calculated_field', 'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'desired_output_field', 'desired_output_field_3d',
+            '_calculated_field_tensor', 'calculated_field',
+            'calculated_output_field_3d', 'error_3d',
+            '_loss_tensor', 'loss', 'gradient'))
         return None
 
     def set_2d_desired_output_field(self, desired_output_field):
@@ -267,7 +275,8 @@ class BeamPropagation:
         assert desired_output_field.dtype == 'complex128'
         self.desired_output_field = desired_output_field
         self._invalidate(( # Remove these attributes, if they exist:
-            'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'desired_output_field_3d', 'calculated_output_field_3d', 'error_3d',
+            '_loss_tensor', 'loss', 'gradient'))
         return None
 
     def calculate_3d_field(self):
@@ -308,7 +317,8 @@ class BeamPropagation:
         self._calculated_field_tensor = calculated_field # List of 2D tensors
         self.calculated_field = self._to_numpy(calculated_field) # 3D array
         self._invalidate(( # Remove these attributes, if they exist:
-            'error_3d', '_loss_tensor', 'loss', 'gradient'))
+            'calculated_output_field_3d', 'error_3d',
+            '_loss_tensor', 'loss', 'gradient'))
         return None
 
     def calculate_loss(self, z_planes=(1, 2, 3)):
@@ -348,6 +358,9 @@ class BeamPropagation:
             loss += intensity_error.abs().sum() / worst_case_intensity_error
         loss = loss / (len(z_planes) + 1)
         # Save our results as attributes, not return values:
+        self.desired_output_field_3d = self._to_numpy(desired_output_field_3d)
+        self.calculated_output_field_3d = self._to_numpy(
+            calculated_output_field_3d)
         self.error_3d = self._to_numpy(error_3d)
         self._loss_tensor = loss
         self.loss = self._to_numpy(loss)[0]
