@@ -1,11 +1,5 @@
 import numpy as np
 import torch # For calculating gradients
-# These imports are only used for the demo code:
-# import time
-# from pathlib import Path
-# from scipy import ndimage as ndi
-# import matplotlib.pyplot as plt
-# import tifffile 
 
 """
 v1.0.5
@@ -20,7 +14,7 @@ Using gradient search, just like training a neural network!
 
 This module defines a `BeamPropagation` class for designing freeform 3D
 refractive optics, and includes some example code for how to use this
-class in the `main()` block below.
+class in the `example_of_usage()` function below.
 
 Written by Andrew G. York, licensed CC-BY 4.0.
 
@@ -30,12 +24,33 @@ them for what's good here, and blame me for what's bad. Please tell me
 if I should add your name to this list!
 """
 
-def main():
+##############################################################################
+## BEGIN EXAMPLE CODE
+##
+##The following block of code is an example of usage.
+##
+## You can copy-paste this block into a separate python script to give
+## you a (hopefully) working example of how to import and use the
+## objects defined in this module.
+##
+## You'll have to uncomment the initial import block of this example
+## code, and the final line that calls the `example_of_usage()` function.
+##############################################################################
+
+## #These imports are only used for the demo code. If you're
+## #copy-pasting this block, uncomment these import statments:
+##
+##import numpy as np
+##from beam_propagation import Coordinates, BeamPropagation, FixedIndexMaterial
+##from beam_propagation import from_tif, to_tif, plot_loss_history
+##from beam_propagation import TrainingData_for_2dImaging
+
+def example_of_usage():
     """Example code: design a 3D refractive optic with specified input/output.
 
     You can execute this code by running this module, but for "normal"
-    use, you should import this module, and write your own code,
-    copy-pasting this example code to get you started.
+    use, you should import this module, and write your own code.
+    Consider copy-pasting this example code to get you started.
 
     In this example, the input/output is simple plane-to-plane imaging
     (with inversion). This is the same input-output you'd expect from a
@@ -51,22 +66,12 @@ def main():
     loss to update our 3D refractive optic.
     """
     import time
-    # If you're copy-pasting this example code, you'll need to put some
-    # import statements at the start of your script, probably something
-    # like this:
-    #
-    # import numpy as np
-    # from beam_propagation import Coordinates, BeamPropagation
-    #
-    # You'll also probably want to copy-paste the function definitions
-    # from the end of this module (e.g. `to_tif()`, `from_tif()`, etc),
-    # along with the if __name__ == '__main__': block.
 
     # Specify our coordinate system, organized via a Coordinates object:
-    coords = Coordinates(xyz_i=(-10, -10,   0),
-                         xyz_f=(+10, +10, +20),
-                         n_xyz=(256, 256, 256))
-    print("Voxel dimensions:", coords.d_xyz)
+    coords = Coordinates(xyz_i=(-12.7, -12.7,     0),
+                         xyz_f=(+12.7, +12.7, +25.4),
+                         n_xyz=(  128,   128,   128))
+    print("Voxel dimensions: %0.3f, %0.3f, %0.3f"%(coords.d_xyz))
 
     # Use these coordinates to initialize an instance of BeamPropagation
     # that will simulate how light changes as it passes through our
@@ -79,11 +84,13 @@ def main():
     bp.set_materials((air, polymer))
 
     # Initialize our object.
+    nx, ny, nz = coords.n_xyz
     try: # If there's an object saved to disk, pick up where we left off:
         initial_concentration = from_tif('1_concentration.tif')
-    except FileNotFoundError: # Otherwise, use a 50/50 mixture at each voxel:
+        assert initial_concentration.shape == (nz, ny, nx)
+    except (FileNotFoundError, AssertionError):
+        # Otherwise, use a 50/50 mixture at each voxel:
         print("Using default initial concentration.")
-        nx, ny, nz = coords.n_xyz
         initial_concentration = 0.5*np.ones((nz, ny, nx))
     bp.set_3d_concentration(initial_concentration)
 
@@ -97,9 +104,9 @@ def main():
     loss_history = []
     for iteration in range(10000):
         start_time = time.perf_counter()
+        
         # Use our data source to generate random input/output pairs:
         x0, y0 = data_source.random_point_in_a_circle()
-        if iteration == 0: x0, y0 = 0, 0
         input_field, desired_output_field = data_source.input_output_pair(
             x0, y0, wavelength, divergence_angle_degrees)
         bp.set_2d_input_field(input_field, wavelength)
@@ -109,23 +116,27 @@ def main():
         # calculate loss, and calculate a gradient that hopefully will
         # reduce the loss:
         bp.gradient_update(
-            step_size=1000,
+            step_size=100,
             z_planes=(1, 2, 3),
             smoothing_sigma=5)
+        loss_history.append((x0, y0, bp.loss))
 
-        # Output some intermediate state, so we can monitor our progress:
         end_time = time.perf_counter()
         print("At iteration", iteration, "the loss is %0.4f"%(bp.loss),
-              "(%0.2f ms)"%(1000*(end_time - start_time)))
-        loss_history.append((x0, y0, bp.loss))
+              "(%0.2f ms elapsed)"%(1000*(end_time - start_time)))
+
+        # Every so often, output some intermediate state, so we can
+        # monitor our progress. You can use ImageJ
+        # ( https://imagej.net/ij/ ) to view the TIF files:
         if iteration % 50 == 0:
             bp.update_attributes()
             print("Saving TIFs etc...", end='')
-            to_tif('0_composition.tif', bp.composition)
-            to_tif('1_concentration.tif', bp.concentration)
-            to_tif('2_input_field.tif', bp.input_field)
+            to_tif('0_composition.tif',          bp.composition)
+            to_tif('1_concentration.tif',        bp.concentration)
+            to_tif('2_input_field.tif',          bp.input_field)
             to_tif('3_desired_output_field.tif', bp.desired_output_field)
-            to_tif('4_calculated_field.tif', np.abs(bp.calculated_field))
+            to_tif('4_calculated_field.tif',
+                   np.abs(bp.calculated_field))
             to_tif('5_desired_output_field_3d',
                    np.abs(bp.desired_output_field_3d))
             to_tif('6_calculated_output_field_3d',
@@ -134,6 +145,16 @@ def main():
             to_tif('8_gradient.tif', bp.gradient)
             plot_loss_history(loss_history, '9_loss_history.png')
             print("done.")
+
+## #Uncomment this last line also, if you're copy-pasting into your own
+## #script:
+##
+##example_of_usage()
+
+##############################################################################
+## END EXAMPLE CODE
+##############################################################################
+
 
 ##############################################################################
 ## The following blocks of code are the heart of the module. You should
@@ -281,14 +302,6 @@ class BeamPropagation:
         return None
 
     def gradient_update(self, step_size, z_planes=(1, 2, 3), smoothing_sigma=5):
-        try:
-            self._require('concentration', 'set_3d_concentration')
-        except AttributeError:
-            self._require('_composition_tensor', 'set_3d_concentration')
-        self._require('material_list', 'set_materials')
-        self._require('input_field', 'set_2d_input_field')
-        self._require('wavelength',  'set_2d_input_field')
-        self._require('desired_output_field', 'set_2d_desired_output_field')
         assert step_size > 0
         assert smoothing_sigma >= 0
         step_size = float(step_size)
@@ -297,7 +310,7 @@ class BeamPropagation:
         # These steps involve pytorch tensors, possibly on the GPU. I
         # find these more annoying to interact with than numpy arrays,
         # but copying to and from the GPU is expensive, so we stay
-        # entirely in torch for these steps:
+        # entirely in torch for these steps:        
         self._calculate_3d_field()
         self._calculate_loss()
         self._calculate_gradient()
@@ -305,6 +318,7 @@ class BeamPropagation:
             update = step_size * smooth_2d(g)
             c.requires_grad_(False)
             c.subtract_(update)
+
         self._invalidate( # Most of our numpy attributes become invalid.
             ('composition', 'concentration', 'calculated_field',
              'desired_output_field_3d', 'calculated_output_field_3d',
@@ -340,6 +354,13 @@ class BeamPropagation:
         I think doi.org/10.1364/AO.17.003990 is the OG reference for the
         algorithm we're currently using here to simulate propagation.
         """
+        try:
+            self._require('concentration', 'set_3d_concentration')
+        except AttributeError:
+            self._require('_composition_tensor', 'set_3d_concentration')
+        self._require('material_list', 'set_materials')
+        self._require('input_field',   'set_2d_input_field')
+        self._require('wavelength',    'set_2d_input_field')
         # How do amplitude and phase change from one slice to the next?
         # Regardless of the object, we want to propagate "between"
         # slices in a homogenous medium with absorbing boundary
@@ -375,6 +396,8 @@ class BeamPropagation:
     def _calculate_loss(self, z_planes=(1, 2, 3)):
         """How well does our calculated field match our desired field?
         """
+        self._require('desired_output_field', 'set_2d_desired_output_field')
+        self._require('_calculated_field_tensor', '_calculate_3d_field')
         # We want gradients, so we'll calculate our loss using Torch:
         desired_output_field = self._to_torch(self.desired_output_field)
         calculated_output_field = self._calculated_field_tensor[-1]
@@ -414,6 +437,8 @@ class BeamPropagation:
     def _calculate_gradient(self):
         """How might we change `composition` in order to improve `loss`?
         """
+        self._require('_composition_tensor', '_calculate_3d_field')
+        self._require('_loss_tensor', '_calculate_loss')
         for c in self._composition_tensor:
             if c.grad is not None:
                 c.grad.zero_()
@@ -691,8 +716,7 @@ class Coordinates:
 
 ##############################################################################
 ## The following utility code is used for the demo in the 'main' block,
-## it's not critical to the module, and probably shouldn't be referenced
-## in your code when you import this module.
+## it's not critical to the module.
 ##############################################################################
 
 def output_directory():
@@ -796,4 +820,4 @@ def gaussian_beam_2d(x, y, x0, y0, phi, theta, wavelength, w):
     return field.squeeze()
 
 if __name__ == '__main__':
-    main()
+    example_of_usage()
