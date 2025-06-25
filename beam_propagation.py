@@ -1,13 +1,14 @@
 import numpy as np
 import torch # For calculating gradients
 # These imports are only used for the demo code:
+# import time
 # from pathlib import Path
 # from scipy import ndimage as ndi
 # import matplotlib.pyplot as plt
 # import tifffile 
 
 """
-v1.0.4
+v1.0.5
 
 Techniques for fabricating freeform 3D refractive optics are rapidly
 maturing. By 'freeform', I don't just mean the shape - I mean optics
@@ -49,6 +50,7 @@ def main():
     calculated output to calculate our "loss", and use gradients of this
     loss to update our 3D refractive optic.
     """
+    import time
     # If you're copy-pasting this example code, you'll need to put some
     # import statements at the start of your script, probably something
     # like this:
@@ -63,7 +65,7 @@ def main():
     # Specify our coordinate system, organized via a Coordinates object:
     coords = Coordinates(xyz_i=(-10, -10,   0),
                          xyz_f=(+10, +10, +20),
-                         n_xyz=(101, 101, 101))
+                         n_xyz=(256, 256, 256))
     print("Voxel dimensions:", coords.d_xyz)
 
     # Use these coordinates to initialize an instance of BeamPropagation
@@ -94,6 +96,7 @@ def main():
     divergence_angle_degrees = 15
     loss_history = []
     for iteration in range(10000):
+        start_time = time.perf_counter()
         # Use our data source to generate random input/output pairs:
         x0, y0 = data_source.random_point_in_a_circle()
         if iteration == 0: x0, y0 = 0, 0
@@ -105,14 +108,18 @@ def main():
         # Simulate propagation through our 3D refractive object,
         # calculate loss, and calculate a gradient that hopefully will
         # reduce the loss:
-        bp.calculate_3d_field()
-        bp.calculate_loss(z_planes=(1, 2, 3))
-        bp.calculate_gradient()
+        bp.gradient_update(
+            step_size=1000,
+            z_planes=(1, 2, 3),
+            smoothing_sigma=5)
 
         # Output some intermediate state, so we can monitor our progress:
-        print("At iteration", iteration, "the loss is", bp.loss)
+        end_time = time.perf_counter()
+        print("At iteration", iteration, "the loss is %0.4f"%(bp.loss),
+              "(%0.2f ms)"%(1000*(end_time - start_time)))
         loss_history.append((x0, y0, bp.loss))
-        if iteration % 10 == 0:
+        if iteration % 50 == 0:
+            bp.update_attributes()
             print("Saving TIFs etc...", end='')
             to_tif('0_composition.tif', bp.composition)
             to_tif('1_concentration.tif', bp.concentration)
@@ -123,15 +130,10 @@ def main():
                    np.abs(bp.desired_output_field_3d))
             to_tif('6_calculated_output_field_3d',
                    np.abs(bp.calculated_output_field_3d))
-            to_tif('7_error.tif', bp.error_3d)
+            to_tif('7_error_3d.tif', bp.error_3d)
             to_tif('8_gradient.tif', bp.gradient)
             plot_loss_history(loss_history, '9_loss_history.png')
             print("done.")
-
-        # Update our 3D refractive object, using our calculated gradient:
-        step_size = 100
-        update = step_size * smooth(bp.gradient)
-        bp.set_3d_composition(bp.composition - update)
 
 ##############################################################################
 ## The following blocks of code are the heart of the module. You should
@@ -184,10 +186,8 @@ class BeamPropagation:
             assert hasattr(m, 'get_index')
         self.material_list = material_list
         self._invalidate(( # Remove these attributes, if they exist:
-            'composition', '_composition_tensor', 'concentration'
-            '_calculated_field_tensor', 'calculated_field',
-            'calculated_output_field_3d', 'error_3d',
-            '_loss_tensor', 'loss', 'gradient'))
+            'calculated_field', 'calculated_output_field_3d',
+            'desired_output_field_3d', 'error_3d', 'loss', 'gradient'))
         return None
 
     def set_3d_concentration(self, concentration):
@@ -196,33 +196,38 @@ class BeamPropagation:
         A concentration of 0 corresponds to a voxel that's entirely the
         'base' material. A concentration of 1 corresponds to a voxel
         that's entirely the 'mixer' material.
+
+        `concentration` is nice for human interpretation, but
+        inconvenient for gradient search, since a concentration outside
+        the range (0, 1) isn't possible, but gradient search will
+        explore outside this range.
+
+        Our current beam propagation model is only accurate if
+        `concentration` is very smoothly varying, so caveat emptor.
         """
-        # This function is just for convenience; the business logic is
-        # in other functions:
-        composition = _to_composition(concentration)
-        self.set_3d_composition(composition)
+        nx, ny, nz = self.coordinates.n_xyz
+        assert concentration.shape == (nz, ny, nx)
+        assert np.isrealobj(concentration)
+        self.concentration = concentration.astype('float64', copy=True)
+        self._invalidate(( # Remove these attributes, if they exist:
+            'composition', 'calculated_field', 'calculated_output_field_3d',
+            'desired_output_field_3d', 'error_3d', 'loss', 'gradient'))
         return None
 
-    def set_3d_composition(self, composition):
+    def _set_3d_composition(self, composition):
         """`composition` is a 3D numpy array describing our refractive object.
 
         A composition of -inf corresponds to a voxel that's entirely the
-        'base' material. A composition of 1 corresponds to a voxel
+        'base' material. A composition of +inf corresponds to a voxel
         that's entirely the 'mixer' material.
-
-        Our current beam propagation model is only accurate if
-        `composition` is very smoothly varying, so caveat emptor.
+        
+        `composition` is nice for gradient search, but inconvenient for
+        human interpretation.
         """
-        self._require('material_list', 'set_materials')
-        nx, ny, nz = self.coordinates.n_xyz
-        assert composition.shape == (nz, ny, nx)
-        assert np.isrealobj(composition)
-        self.composition = composition.astype('float64', copy=True)
-        self.concentration = _to_concentration(self.composition)
-        self._invalidate(( # Remove these attributes, if they exist:
-            '_composition_tensor', '_calculated_field_tensor',
-            'calculated_field', 'calculated_output_field_3d', 'error_3d',
-            '_loss_tensor', 'loss', 'gradient'))
+        # This function is just for convenience; the business logic is
+        # in other functions:
+        concentration = _to_concentration(composition)
+        self.set_3d_concentration(concentration)
         return None
 
     def set_2d_input_field(self, input_field, wavelength):
@@ -242,19 +247,16 @@ class BeamPropagation:
         If you're simulating dispersion using a SellmeierMaterial, then
         the units of `wavelength` need to be microns.
         """
-        self._require('material_list', 'set_materials')
         nx, ny, nz = self.coordinates.n_xyz
         assert input_field.shape == (ny, nx)
         assert input_field.dtype == 'complex128'
         assert wavelength > 0
         self.input_field = input_field
         self.wavelength = wavelength
-        self.index_list = [m.get_index(wavelength) for m in self.material_list]
         self._invalidate(( # Remove these attributes, if they exist:
-            'desired_output_field', 'desired_output_field_3d',
-            '_calculated_field_tensor', 'calculated_field',
-            'calculated_output_field_3d', 'error_3d',
-            '_loss_tensor', 'loss', 'gradient'))
+            'desired_output_field', 'calculated_field',
+            'calculated_output_field_3d', 'desired_output_field_3d',
+            'error_3d', 'loss', 'gradient'))
         return None
 
     def set_2d_desired_output_field(self, desired_output_field):
@@ -269,38 +271,91 @@ class BeamPropagation:
         closer to yielding our desired output.
         """
         self._require('input_field', 'set_2d_input_field')
-        self._require('wavelength', 'set_2d_input_field')
+        self._require('wavelength',  'set_2d_input_field')
         nx, ny, nz = self.coordinates.n_xyz
         assert desired_output_field.shape == (ny, nx)
         assert desired_output_field.dtype == 'complex128'
         self.desired_output_field = desired_output_field
         self._invalidate(( # Remove these attributes, if they exist:
-            'desired_output_field_3d', 'calculated_output_field_3d', 'error_3d',
-            '_loss_tensor', 'loss', 'gradient'))
+            'desired_output_field_3d', 'error_3d', 'loss', 'gradient'))
         return None
 
-    def calculate_3d_field(self):
+    def gradient_update(self, step_size, z_planes=(1, 2, 3), smoothing_sigma=5):
+        try:
+            self._require('concentration', 'set_3d_concentration')
+        except AttributeError:
+            self._require('_composition_tensor', 'set_3d_concentration')
+        self._require('material_list', 'set_materials')
+        self._require('input_field', 'set_2d_input_field')
+        self._require('wavelength',  'set_2d_input_field')
+        self._require('desired_output_field', 'set_2d_desired_output_field')
+        assert step_size > 0
+        assert smoothing_sigma >= 0
+        step_size = float(step_size)
+        smoothing_sigma = float(smoothing_sigma)
+        z_planes = [float(z) for z in z_planes]
+        # These steps involve pytorch tensors, possibly on the GPU. I
+        # find these more annoying to interact with than numpy arrays,
+        # but copying to and from the GPU is expensive, so we stay
+        # entirely in torch for these steps:
+        self._calculate_3d_field()
+        self._calculate_loss()
+        self._calculate_gradient()
+        for g, c in zip(self._gradient_tensor, self._composition_tensor):
+            update = step_size * smooth_2d(g)
+            c.requires_grad_(False)
+            c.subtract_(update)
+        self._invalidate( # Most of our numpy attributes become invalid.
+            ('composition', 'concentration', 'calculated_field',
+             'desired_output_field_3d', 'calculated_output_field_3d',
+             'error_3d', 'gradient'),
+            # ...but the corresponding tensor attributes are still ok:
+            also_invalidate_tensors=False)
+        return None
+
+    def update_attributes(self):
+        """Convert our private torch tensors to public numpy arrays.
+
+        A typical workflow is to call `gradient_update()` multiple times
+        in a loop, and occasionally call `update_attributes()` to copy
+        data off of the GPU for visualization and sanity checks.
+        """
+        for numpy_name in ('composition',
+                           'calculated_field',
+                           'desired_output_field_3d',
+                           'calculated_output_field_3d',
+                           'error_3d',
+                           'gradient'):
+            torch_name = '_' + numpy_name + '_tensor'
+            if hasattr(self, torch_name):
+                tensor = getattr(self, torch_name)
+                setattr(self, numpy_name, self._to_numpy(tensor))
+        if hasattr(self, 'composition'):
+            self.concentration = _to_concentration(self.composition)
+        return None
+
+    def _calculate_3d_field(self):
         """Propagate the input field through each z-slice of the volume.
 
         I think doi.org/10.1364/AO.17.003990 is the OG reference for the
         algorithm we're currently using here to simulate propagation.
         """
-        self._require('input_field', 'set_2d_input_field')
-        self._require('wavelength', 'set_2d_input_field')
-        self._require('composition', 'set_3d_composition')
         # How do amplitude and phase change from one slice to the next?
         # Regardless of the object, we want to propagate "between"
         # slices in a homogenous medium with absorbing boundary
         # conditions:
-        amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
         phase_mask     = self._propagation_phase_mask(self.coordinates.dz)
+        amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
         # Use Torch tensors so we can calculate gradients:
         fft, ifft, exp = torch.fft.fftn, torch.fft.ifftn, torch.exp
-        amplitude_mask = self._to_torch(amplitude_mask)
-        phase_mask     = self._to_torch(phase_mask)
         input_field    = self._to_torch(self.input_field)
-        # This is a list of 2D tensors, not a 3D tensor like you might expect:
-        self._composition_tensor = self._to_torch(self.composition) 
+        if not hasattr(self, '_composition_tensor'):
+            # Note that this is a list of 2D tensors, not a 3D tensor
+            # like you might expect. I think this important for the
+            # performance of backpropagation, but maybe I just don't
+            # understand pytorch:
+            self._composition_tensor = [_to_composition(self._to_torch(c))
+                                        for c in self.concentration]
         # Propagate the light through the object, one slice at a time:
         calculated_field = [input_field]
         for c in self._composition_tensor:
@@ -314,21 +369,12 @@ class BeamPropagation:
                 amplitude_mask * exp(1j * phase_shifts) *
                 ifft(phase_mask * fft(calculated_field[-1])))
         # Save results as attributes, not return values:
-        self._calculated_field_tensor = calculated_field # List of 2D tensors
-        self.calculated_field = self._to_numpy(calculated_field) # 3D array
-        self._invalidate(( # Remove these attributes, if they exist:
-            'calculated_output_field_3d', 'error_3d',
-            '_loss_tensor', 'loss', 'gradient'))
+        self._calculated_field_tensor = calculated_field
         return None
 
-    def calculate_loss(self, z_planes=(1, 2, 3)):
+    def _calculate_loss(self, z_planes=(1, 2, 3)):
         """How well does our calculated field match our desired field?
-
-        This function doesn't return a value; it populates the
-        attributes `loss`, `_loss_tensor`, and `error_3d`.
         """
-        self._require('desired_output_field', 'set_2d_desired_output_field')
-        self._require('_calculated_field_tensor', 'calculate_3d_field')
         # We want gradients, so we'll calculate our loss using Torch:
         desired_output_field = self._to_torch(self.desired_output_field)
         calculated_output_field = self._calculated_field_tensor[-1]
@@ -346,7 +392,7 @@ class BeamPropagation:
             desired_output_field_3d.append(   d_at_dz)
             calculated_output_field_3d.append(c_at_dz)
 
-        loss = torch.zeros(1, device=self.device)
+        loss = torch.zeros(1, device=self.device, dtype=torch.float64)
         error_3d = [] # Useful for visualization
         for d, c in zip(desired_output_field_3d, calculated_output_field_3d):
             desired_intensity    = d.abs()**2
@@ -358,41 +404,53 @@ class BeamPropagation:
             loss += intensity_error.abs().sum() / worst_case_intensity_error
         loss = loss / (len(z_planes) + 1)
         # Save our results as attributes, not return values:
-        self.desired_output_field_3d = self._to_numpy(desired_output_field_3d)
-        self.calculated_output_field_3d = self._to_numpy(
-            calculated_output_field_3d)
-        self.error_3d = self._to_numpy(error_3d)
+        self._desired_output_field_3d_tensor = desired_output_field_3d
+        self._calculated_output_field_3d_tensor = calculated_output_field_3d
+        self._error_3d_tensor = error_3d
         self._loss_tensor = loss
         self.loss = self._to_numpy(loss)[0]
-        self._invalidate(('gradient',)) # Remove this attribute, if it exists.
         return None
 
-    def calculate_gradient(self):
-        self._require('_loss_tensor', 'calculate_loss')
-        self._require('_composition_tensor', 'calculate_3d_field')
+    def _calculate_gradient(self):
+        """How might we change `composition` in order to improve `loss`?
+        """
+        for c in self._composition_tensor:
+            if c.grad is not None:
+                c.grad.zero_()
         self._loss_tensor.backward()
-        self.gradient = self._to_numpy(
-            [c.grad for c in self._composition_tensor])
+        self._gradient_tensor = [c.grad for c in self._composition_tensor]
         return None
 
     def _propagation_phase_mask(self, distance):
+        """For simulating propagation in homogenous materials
+
+        This is only used inside other private methods, so its
+        implemented in torch Tensors, not numpy arrays.
+        """
         self._require('wavelength', 'set_2d_input_field')
+        # Local nicknames:
         nx, ny, nz = self.coordinates.n_xyz
         dx, dy, dz = self.coordinates.d_xyz
+        wavelength, d = self.wavelength, self.device
+        fftfreq, nan_to_num = torch.fft.fftfreq, torch.nan_to_num
+        pi, sqrt, exp = torch.pi, torch.sqrt, torch.exp
         # Spatial frequencies as a function of position in FFT space:
-        k  = 2*np.pi/self.wavelength
-        kx = 2*np.pi*np.fft.fftfreq(nx, dx).reshape( 1, nx)
-        ky = 2*np.pi*np.fft.fftfreq(ny, dy).reshape(ny,  1)
-        with np.errstate(invalid='ignore'):
-            kz = np.sqrt(k**2 - kx**2 - ky**2)
-        phase_mask = np.nan_to_num(np.exp(1j*kz*distance))
+        k  = 2*pi / wavelength
+        kx = 2*pi * fftfreq(nx, dx, device=d).reshape( 1, nx)
+        ky = 2*pi * fftfreq(ny, dy, device=d).reshape(ny,  1)
+        # with np.errstate(invalid='ignore'): # I don't need this for torch?
+        kz = nan_to_num(sqrt(k**2 - kx**2 - ky**2))
+        phase_mask = exp(1j*kz*distance)
         return phase_mask
 
     def _apodization_amplitude_mask(self, edge_pixels=5, edge_value=0.5):
-        # We want absorptive boundary conditions, not reflective or
-        # periodic boundary conditions, so we smoothly reduce the
-        # transmission amplitude near the lateral edges of the
-        # simulation volume.
+        """For simulating propagation with non-periodic boundary conditions.
+
+        We want absorptive boundary conditions, not reflective or
+        periodic boundary conditions, so we smoothly reduce the
+        transmission amplitude near the lateral edges of the simulation
+        volume.
+        """
         edge_pixels = int(edge_pixels)
         assert edge_pixels > 0
         assert edge_value >= 0
@@ -400,10 +458,12 @@ class BeamPropagation:
         nx, ny, nz = self.coordinates.n_xyz
         assert nx > 2*edge_pixels
         assert ny > 2*edge_pixels
+        # Local nicknames:
+        ones, linspace, float64 = torch.ones, torch.linspace, torch.float64
         def linear_taper(n):
-            mask = np.ones(n, dtype='float64')
-            mask[  0:edge_pixels] = np.linspace(edge_value, 1, edge_pixels)
-            mask[-edge_pixels:] = np.linspace(1, edge_value, edge_pixels)
+            mask = ones(n, dtype=float64, device=self.device)
+            mask[  0:edge_pixels] = linspace(edge_value, 1, edge_pixels)
+            mask[-edge_pixels:] = linspace(1, edge_value, edge_pixels)
             return mask
         amplitude_mask = (linear_taper(nx).reshape(1, nx) *
                           linear_taper(ny).reshape(ny, 1))
@@ -425,6 +485,7 @@ class BeamPropagation:
         # The index of refraction is a weighted average of our
         # materials. For now, we only implement binary mixtures:
         concentration = _to_concentration(composition)
+        self.index_list = [m.get_index(wavelength) for m in self.material_list]
         assert len(self.index_list) == 2
         index_1, index_2 = self.index_list
         index_minus_1 = (index_1 - 1) + (index_2 - index_1)*concentration
@@ -436,28 +497,36 @@ class BeamPropagation:
         return phase_shifts # This is a pytorch Tensor (which allows autograd)
 
     def _freespace_propagation(self, field, distance):
-        # Like 'calculate_3d_propagation()', but for a single step, with
-        # no edge absorption and no phase shifts. We use this internally
-        # to calculate the loss function.
+        """
+        Like `_calculate_3d_propagation()`, but for a single step, with
+        no edge absorption and no phase shifts. We use this internally
+        to calculate the loss function.
+        """
         nx, ny, nz = self.coordinates.n_xyz
         assert field.shape == (ny, nx)
         phase_mask = self._propagation_phase_mask(distance)
         if isinstance(field, np.ndarray):     # Numpy input, return an array
             assert np.iscomplexobj(field)
             fft, ifft = np.fft.fftn, np.fft.ifftn
+            phase_mask = self._to_numpy(phase_mask)
         elif isinstance(field, torch.Tensor): # Torch input, return a tensor
             assert torch.is_complex(field)
-            phase_mask = self._to_torch(phase_mask)
             fft, ifft = torch.fft.fftn, torch.fft.ifftn
         field_after_propagation = ifft(phase_mask * fft(field))
         return field_after_propagation
 
-    def _invalidate(self, iterable_of_attribute_names):
+    def _invalidate(
+        self,
+        iterable_of_attribute_names,
+        also_invalidate_tensors=True
+        ):
         # Many of the methods above need to invalidate (i.e. delete)
         # multiple attributes. This makes it a little more convenient:
         for attr in iterable_of_attribute_names:
-            if hasattr(self, attr):
-                delattr(self, attr)
+            if hasattr(self, attr): delattr(self, attr)
+            if also_invalidate_tensors:
+                tensor_attr = '_' + attr + '_tensor'
+                if hasattr(self, tensor_attr): delattr(self, tensor_attr)
         return None
 
     def _require(self, attribute_name, prerequisite_function_name):
@@ -499,15 +568,7 @@ class BeamPropagation:
             return out
 
 def _to_concentration(composition):
-    """`concentration` is a 3D numpy array describing our refractive object.
-
-    A concentration of 0 corresponds to a voxel that's entirely the
-    'base' material. A concentration of 1 corresponds to a voxel that's
-    entirely the 'mixer' material.
-
-    `concentration` is nice for human interpretation, but inconvenient
-    for gradient search, since a concentration outside the range (0, 1)
-    isn't possible, but gradient search will explore outside this range.
+    """See `set_3d_concentration` for details
     """
     if isinstance(composition, torch.Tensor):
         arctan = torch.arctan
@@ -518,14 +579,7 @@ def _to_concentration(composition):
     return concentration
 
 def _to_composition(concentration):
-    """`composition` is a 3D numpy array describing our refractive object.
-
-    A composition of -inf corresponds to a voxel that's entirely the
-    'base' material. A composition of +inf corresponds to a voxel that's
-    entirely the 'mixer' material.
-
-    `composition` is nice for gradient search, but inconvenient
-    for human interpretation.
+    """See `set_3d_composition` for details.
     """
     if isinstance(concentration, torch.Tensor):
         tan, clip = torch.tan, torch.clip
@@ -537,6 +591,27 @@ def _to_composition(concentration):
     concentration = clip(concentration, eps, 1-eps)
     composition = tan(np.pi*(concentration - 0.5))
     return composition
+
+def smooth_2d(a, sigma=5):
+    """Smooth a 2D torch tensor via convolution with a small Gaussian kernel
+
+    Similar to scipy.ndimage.gaussian_filter(), but (potentially)faster via GPU.
+    """
+    assert a.ndim == 2
+    assert isinstance(a, torch.Tensor)
+    # Local nicknames:
+    arange, exp, conv2d = torch.arange, torch.exp, torch.nn.functional.conv2d
+    # Make a gaussian kernel:
+    radius = int(4*sigma + 0.5)
+    x = arange(-radius, radius+1, dtype=a.dtype).to(a.device)
+    gaussian = exp((-0.5/sigma**2) * x**2)
+    gaussian = gaussian / gaussian.sum()
+    # Use pytorch for 2d convolution.
+    # The shape that conv2d expects is all minibatch-silly:
+    s0, s1 = a.shape, (1, 1) + a.shape
+    for s2 in ((1, 1, 1, len(x)), (1, 1, len(x), 1)):
+        a = conv2d(a.view(s1), gaussian.view(s2), padding='same')
+    return a.view(s0) # Clip off the silly extra dimensions.
 
 class SellmeierMaterial:
     """The Sellmeier equation is an empirical relationship between
@@ -639,10 +714,6 @@ def to_tif(filename, x):
 def from_tif(filename):
     import tifffile as tf
     return tf.imread(output_directory() / filename)
-
-def smooth(x):
-    from scipy import ndimage as ndi
-    return ndi.gaussian_filter(x, sigma=(2, 5, 5))
 
 def plot_loss_history(loss_history, filename):
     import matplotlib as mpl
