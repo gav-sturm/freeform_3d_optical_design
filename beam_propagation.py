@@ -131,19 +131,20 @@ def example_of_usage():
         if iteration % 50 == 0:
             bp.update_attributes()
             print("Saving TIFs etc...", end='')
-            to_tif('0_composition.tif',          bp.composition)
-            to_tif('1_concentration.tif',        bp.concentration)
-            to_tif('2_input_field.tif',          bp.input_field)
-            to_tif('3_desired_output_field.tif', bp.desired_output_field)
-            to_tif('4_calculated_field.tif',
+            to_tif('00_composition.tif',          bp.composition)
+            to_tif('01_concentration.tif',        bp.concentration)
+            to_tif('02_concentration_xz.tif',     bp.concentration[:,ny//2,:])
+            to_tif('03_input_field.tif',          bp.input_field)
+            to_tif('04_desired_output_field.tif', bp.desired_output_field)
+            to_tif('05_calculated_field.tif',
                    np.abs(bp.calculated_field))
-            to_tif('5_desired_output_field_3d',
+            to_tif('06_desired_output_field_3d',
                    np.abs(bp.desired_output_field_3d))
-            to_tif('6_calculated_output_field_3d',
+            to_tif('07_calculated_output_field_3d',
                    np.abs(bp.calculated_output_field_3d))
-            to_tif('7_error_3d.tif', bp.error_3d)
-            to_tif('8_gradient.tif', bp.gradient)
-            plot_loss_history(loss_history, '9_loss_history.png')
+            to_tif('08_error_3d.tif', bp.error_3d)
+            to_tif('09_gradient.tif', bp.gradient)
+            plot_loss_history(loss_history, '10_loss_history.png')
             print("done.")
 
 ## #Uncomment this last line also, if you're copy-pasting into your own
