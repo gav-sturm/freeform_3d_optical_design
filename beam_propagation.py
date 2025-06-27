@@ -164,7 +164,10 @@ def example_of_usage():
 ##############################################################################
 
 class BeamPropagation:
-    """Simulate propagation of a light through a 3D refractive object.
+    """Simulate light propagation through a 3D refractive object, with autograd.
+
+    We use the resulting gradients to update the 3D object, to
+    (hopefully) design an optic with a desired input/output behavior.
     """
     def __init__(self, coordinates, try_cuda=True):
         assert isinstance(coordinates, Coordinates)
@@ -269,10 +272,21 @@ class BeamPropagation:
         If you're simulating dispersion using a SellmeierMaterial, then
         the units of `wavelength` need to be microns.
         """
+        self._require('material_list', 'set_materials')
         nx, ny, nz = self.coordinates.n_xyz
         assert input_field.shape == (ny, nx)
         assert input_field.dtype == 'complex128'
         assert wavelength > 0
+        warning_string = ("""
+    You're using a SellmeierMaterial, which expects the units of
+    'wavelength' to be in microns, but your specified wavelength (%0.2f)
+    seems to be outside the visible spectrum. Hopefully you know what
+    you're doing!\n"""%(wavelength))
+        if any([isinstance(m, SellmeierMaterial) for m in self.material_list]):
+            if wavelength < 0.3 or 0.9 < wavelength:
+                if not hasattr(self, '_SellmeierMaterial_warning'):
+                    print(warning_string)
+                    self._SellmeierMaterial_warning = True
         self.input_field = input_field
         self.wavelength = wavelength
         self._invalidate(( # Remove these attributes, if they exist:
@@ -303,6 +317,23 @@ class BeamPropagation:
         return None
 
     def gradient_update(self, step_size, z_planes=(1, 2, 3), smoothing_sigma=5):
+        """Update our object to get closer to our desired behavior.
+
+        This is multiple steps rolled into one:
+         * Calculate light propagation through our refractive object.
+         * Calculate the loss (aggregate difference between calculated
+           and desired behavior).
+         * Calculate the gradient of this loss (how can we modify our
+           refractive object to improve its performance?).
+         * Update our object with a smoothed (gaussian filter with
+           kernel size = `smoothing_sigma`), scaled (multiplied
+           by `step_size`) version of this gradient.
+
+        If you know what you're doing, you can do these steps
+        individually, but I often prefer having them rolled into one.
+
+        See `_calculate_loss()` for an explanation of `z_planes`.
+        """
         assert step_size > 0
         assert smoothing_sigma >= 0
         step_size = float(step_size)
@@ -315,8 +346,11 @@ class BeamPropagation:
         self._calculate_3d_field()
         self._calculate_loss()
         self._calculate_gradient()
+        # The gradient usually has high-spatial-frequency content that
+        # isn't desirable or manufacturable, so we update our refractive
+        # object with a scaled, smoothed version of the gradient:
         for g, c in zip(self._gradient_tensor, self._composition_tensor):
-            update = step_size * smooth_2d(g)
+            update = step_size * smooth_2d(g, sigma=smoothing_sigma)
             c.requires_grad_(False)
             c.subtract_(update)
 
@@ -328,12 +362,16 @@ class BeamPropagation:
             also_invalidate_tensors=False)
         return None
 
-    def update_attributes(self):
+    def update_attributes(self, delete_tensors=True):
         """Convert our private torch tensors to public numpy arrays.
 
         A typical workflow is to call `gradient_update()` multiple times
         in a loop, and occasionally call `update_attributes()` to copy
         data off of the GPU for visualization and sanity checks.
+
+        By default, we delete the private torch tensors. This can be
+        important if you don't want to leave large tensors on a GPU, for
+        example.
         """
         for numpy_name in ('composition',
                            'calculated_field',
@@ -345,6 +383,8 @@ class BeamPropagation:
             if hasattr(self, torch_name):
                 tensor = getattr(self, torch_name)
                 setattr(self, numpy_name, self._to_numpy(tensor))
+                if delete_tensors:
+                    delattr(self, torch_name)
         if hasattr(self, 'composition'):
             self.concentration = _to_concentration(self.composition)
         return None
@@ -364,11 +404,11 @@ class BeamPropagation:
         self._require('wavelength',    'set_2d_input_field')
         # How do amplitude and phase change from one slice to the next?
         # Regardless of the object, we want to propagate "between"
-        # slices in a homogenous medium with absorbing boundary
-        # conditions:
+        # slices as if we were in a homogenous medium with absorbing
+        # boundary conditions:
         phase_mask     = self._propagation_phase_mask(self.coordinates.dz)
         amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
-        # Use Torch tensors so we can calculate gradients:
+        # Use Torch so we can calculate gradients:
         fft, ifft, exp = torch.fft.fftn, torch.fft.ifftn, torch.exp
         input_field    = self._to_torch(self.input_field)
         if not hasattr(self, '_composition_tensor'):
@@ -386,7 +426,9 @@ class BeamPropagation:
             c.requires_grad_(True)
             # Convert the composition to phase shifts:
             phase_shifts = self._composition_to_phase_shifts(c)
-            # fft, multiply, ifft, multiply:
+            # This step accounts for 99% of the computational burden of
+            # this entire module:
+            # fft, multiply, ifft, multiply
             calculated_field.append(
                 amplitude_mask * exp(1j * phase_shifts) *
                 ifft(phase_mask * fft(calculated_field[-1])))
@@ -396,6 +438,17 @@ class BeamPropagation:
 
     def _calculate_loss(self, z_planes=(1, 2, 3)):
         """How well does our calculated field match our desired field?
+
+        `z_planes` is a list of z-offsets (in the same units as our
+        `Coordinates` object, relative to the output plane of our 3D
+        refractive object) at which we'll calculate the intensity
+        mismatch between our calculated field and our desired field.
+
+        This 3D intensity-only penalty is a convenient way to penalize
+        erros in both position (intensity) and direction (phase) of our
+        calculated field, without ever directly referring to phase. In
+        my hands, it works better than any 2D penalty that refers
+        directly to both intensity and phase.
         """
         self._require('desired_output_field', 'set_2d_desired_output_field')
         self._require('_calculated_field_tensor', '_calculate_3d_field')
@@ -476,6 +529,9 @@ class BeamPropagation:
         periodic boundary conditions, so we smoothly reduce the
         transmission amplitude near the lateral edges of the simulation
         volume.
+
+        This is only used inside other private methods, so its
+        implemented in torch Tensors, not numpy arrays.
         """
         edge_pixels = int(edge_pixels)
         assert edge_pixels > 0
@@ -488,7 +544,7 @@ class BeamPropagation:
         ones, linspace, float64 = torch.ones, torch.linspace, torch.float64
         def linear_taper(n):
             mask = ones(n, dtype=float64, device=self.device)
-            mask[  0:edge_pixels] = linspace(edge_value, 1, edge_pixels)
+            mask[0:edge_pixels] = linspace(edge_value, 1, edge_pixels)
             mask[-edge_pixels:] = linspace(1, edge_value, edge_pixels)
             return mask
         amplitude_mask = (linear_taper(nx).reshape(1, nx) *
@@ -629,13 +685,14 @@ def smooth_2d(a, sigma=5):
     arange, exp, conv2d = torch.arange, torch.exp, torch.nn.functional.conv2d
     # Make a gaussian kernel:
     radius = int(4*sigma + 0.5)
-    x = arange(-radius, radius+1, dtype=a.dtype).to(a.device)
+    x = arange(-radius, radius+1, dtype=a.dtype, device=a.device)
     gaussian = exp((-0.5/sigma**2) * x**2)
     gaussian = gaussian / gaussian.sum()
     # Use pytorch for 2d convolution.
-    # The shape that conv2d expects is all minibatch-silly:
+    # The shapes that conv2d expects are all minibatch-silly:
     s0, s1 = a.shape, (1, 1) + a.shape
     for s2 in ((1, 1, 1, len(x)), (1, 1, len(x), 1)):
+        # We use a pair of 2D convolutions with a pair of 1D kernels. Wheee!
         a = conv2d(a.view(s1), gaussian.view(s2), padding='same')
     return a.view(s0) # Clip off the silly extra dimensions.
 
@@ -657,7 +714,7 @@ class SellmeierMaterial:
         return None
 
     def get_index(self, wavelength_um):
-        lamda_sq = wavelength_um**2
+        lamda_sq = wavelength_um * wavelength_um
         index_sq = 1
         for b, c in zip(self.B, self.C):
             index_sq += b * lamda_sq / (lamda_sq - c)
