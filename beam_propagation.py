@@ -512,11 +512,11 @@ class BeamPropagation:
         dx, dy, dz = self.coordinates.d_xyz
         wavelength, d = self.wavelength, self.device
         fftfreq, nan_to_num = torch.fft.fftfreq, torch.nan_to_num
-        pi, sqrt, exp = torch.pi, torch.sqrt, torch.exp
+        pi, sqrt, exp, float64 = torch.pi, torch.sqrt, torch.exp, torch.float64
         # Spatial frequencies as a function of position in FFT space:
         k  = 2*pi / wavelength
-        kx = 2*pi * fftfreq(nx, dx, device=d).reshape( 1, nx)
-        ky = 2*pi * fftfreq(ny, dy, device=d).reshape(ny,  1)
+        kx = 2*pi * fftfreq(nx, dx, dtype=float64, device=d).reshape( 1, nx)
+        ky = 2*pi * fftfreq(ny, dy, dtype=float64, device=d).reshape(ny,  1)
         # with np.errstate(invalid='ignore'): # I don't need this for torch?
         kz = nan_to_num(sqrt(k**2 - kx**2 - ky**2))
         phase_mask = exp(1j*kz*distance)
@@ -736,7 +736,7 @@ class FixedIndexMaterial:
 
     def get_index(self, wavelength_um):
         return self.index
-            
+
 class Coordinates:
     """A convenience class for keeping track of the coordinates of our voxels.
 
