@@ -648,6 +648,8 @@ class BeamPropagation:
             for i in range(1, nz):
                 out[i, :, :] = x[i].cpu().detach().numpy()
             return out
+        else:
+            assert type(x) in (torch.Tensor, list)
 
 def _to_concentration(composition):
     """See `set_3d_concentration` for details
