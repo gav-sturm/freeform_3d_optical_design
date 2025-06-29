@@ -760,6 +760,11 @@ class Coordinates:
         assert nx > 20
         assert ny > 20
         assert nz > 0
+        # - Initial and final voxel positions:
+        self.xyz_i = xi, yi, zi
+        self.x_i, self.y_i, self.z_i = self.xyz_i
+        self.xyz_f = xf, yf, zf
+        self.x_f, self.y_f, self.z_f = self.xyz_f
         # - Position of voxels:
         self.xyz = (np.linspace(xi, xf, nx).reshape( 1,  1, nx),
                     np.linspace(yi, yf, ny).reshape( 1, ny,  1),
