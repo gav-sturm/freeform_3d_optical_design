@@ -12,7 +12,7 @@ how shall we design these optics?
 
 Using gradient search, just like training a neural network!
 
-This module defines a `BeamPropagation` class for designing freeform 3D
+This module defines a `Refractive3dObject` class for designing freeform 3D
 refractive optics, and includes some example code for how to use this
 class in the `example_of_usage()` function below.
 
@@ -41,9 +41,9 @@ if I should add your name to this list!
 ## #copy-pasting this block, uncomment these import statments:
 ##
 ##import numpy as np
-##from beam_propagation import Coordinates, BeamPropagation, FixedIndexMaterial
-##from beam_propagation import from_tif, to_tif, plot_loss_history
-##from beam_propagation import TrainingData_for_2dImaging
+##from beam_propagation import (
+##    Coordinates, Refractive3dObject, FixedIndexMaterial,
+##    TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history)
 
 def example_of_usage():
     """Example code: design a 3D refractive optic with specified input/output.
@@ -73,10 +73,10 @@ def example_of_usage():
                          n_xyz=(  128,   128,   128))
     print("Voxel dimensions: %0.3f, %0.3f, %0.3f"%(coords.d_xyz))
 
-    # Use these coordinates to initialize an instance of BeamPropagation
+    # Use these coordinates to initialize an instance of Refractive3dObject
     # that will simulate how light changes as it passes through our
     # refractive object:
-    bp = BeamPropagation(coords)
+    bp = Refractive3dObject(coords)
 
     # Each voxel of our refractive object is a mixture of materials:
     air     = FixedIndexMaterial(1)
@@ -163,7 +163,7 @@ def example_of_usage():
 ## above.
 ##############################################################################
 
-class BeamPropagation:
+class Refractive3dObject:
     """Simulate light propagation through a 3D refractive object, with autograd.
 
     We use the resulting gradients to update the 3D object, to
