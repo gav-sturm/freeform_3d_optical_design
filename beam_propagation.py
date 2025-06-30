@@ -176,6 +176,7 @@ class BeamPropagation:
         self.device = torch.device('cpu')
         if try_cuda and torch.cuda.is_available():
             self.device = torch.device('cuda')
+        self.set_3d_concentration()
         return None
 
     def set_materials(self, material_list):
@@ -215,7 +216,7 @@ class BeamPropagation:
             'desired_output_field_3d', 'error_3d', 'loss', 'gradient'))
         return None
 
-    def set_3d_concentration(self, concentration):
+    def set_3d_concentration(self, concentration=None):
         """`concentration` is a 3D numpy array describing our refractive object.
 
         A concentration of 0 corresponds to a voxel that's entirely the
@@ -231,6 +232,8 @@ class BeamPropagation:
         `concentration` is very smoothly varying, so caveat emptor.
         """
         nx, ny, nz = self.coordinates.n_xyz
+        if concentration is None: # Default to a 50/50 mixture at every voxel
+            concentration = np.broadcast_to(0.5, (nz, ny, nx))
         assert concentration.shape == (nz, ny, nx)
         assert np.isrealobj(concentration)
         self.concentration = concentration.astype('float64', copy=True)
