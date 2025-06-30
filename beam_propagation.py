@@ -824,7 +824,6 @@ class RefractiveOpticSequence:
         assert len(optics_list) > 0
         for o in optics_list:
             assert isinstance(o, Refractive3dOptic)
-            assert hasattr(o, 'material_list')
             if not hasattr(o, 'allow_gradient_update'):
                 o.allow_gradient_update = True
             assert o.allow_gradient_update in (True, False)
@@ -846,11 +845,12 @@ class RefractiveOpticSequence:
         self.optics = optics_list
         return None
 
-    def disable_gradient_update(which_optic):
+    def disable_gradient_update(self, optic):
         """We might not want to optimize all of the optics in our sequence.
         """
-        assert which_optic in range(len(self.optics))
-        self.optics[which_optic].allow_gradient_update = False
+        assert optic in self.optics
+        optic.allow_gradient_update = False
+        return None
 
     def set_2d_input_field(self, input_field, wavelength):
         """See `Refractive3dOptic.set_2d_input_field()` for details
@@ -894,6 +894,7 @@ class RefractiveOpticSequence:
             delattr(self, 'desired_output_field')
             final_optic._calculate_3d_field()
             final_optic._calculate_loss()
+            self.loss = np.copy(final_optic.loss)
             # Zero the gradient for all the optics:
             for i, o in enumerate(self.optics):
                 for c in o._composition_tensor:
