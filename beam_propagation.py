@@ -791,6 +791,131 @@ class Coordinates:
         self.nx, self.ny, self.nz = self.n_xyz
         return None
 
+class RefractiveOpticSequence:
+    def __init__(self, optics_list):
+        """Multiple Refractive3dOptics in a row.
+
+        The output field of the Nth Refractive3dOptic is the input field
+        to the N+1th Refractive3dOptic.
+
+        For example, you might want to simulate a big air gap in between
+        two 3D printed optics:
+        
+        air = FixedIndexMaterial(1)
+        polymer = FixedIndexMaterial(1.5)
+        coords = Coordinates(xyz_i=(-12.7, -12.7, -12.7),
+                             xyz_f=(+12.7, +12.7, +12.7),
+                             n_xyz=(  128,   128,   128))
+
+        printed_optic_1 = Refractive3dOptic(coords)
+        printed_optic_1.set_materials((air, polymer))
+
+        air_gap = Refractive3dOptic(coords)
+        air_gap.set_materials((air, air))
+        air_gap.allow_gradient_update = False
+
+        printed_optic_2 = Refractive3dOptic(coords)
+        printed_optic_2.set_materials((air, polymer))
+
+        my_optics = RefractiveOpticSequence((printed_optic_1,
+                                             air_gap,
+                                             printed_optic_2))
+        """
+        assert len(optics_list) > 0
+        for o in optics_list:
+            assert isinstance(o, Refractive3dOptic)
+            assert hasattr(o, 'material_list')
+            if not hasattr(o, 'allow_gradient_update'):
+                o.allow_gradient_update = True
+            assert o.allow_gradient_update in (True, False)
+        for o1, o2 in zip(optics_list[ :-1], optics_list[1:  ]):
+            # We don't check that the z-coordinates of our consecutive
+            # optics are consistent, but be thoughtful about the fact
+            # that the z-positions of the refractive voxels and the
+            # z-positions of the calculated field have a "fencepost"
+            # relationship:
+            #
+            # https://en.wikipedia.org/wiki/Off-by-one_error#Fencepost_error
+            #
+            # We *do* check that consecutive optics share XY coordinates:
+            c1, c2 = o1.coordinates, o2.coordinates
+            assert c1.nx == c2.nx # Consecutive optics have same # of x-pixels
+            assert c1.ny == c2.ny # Consecutive optics have same # of y-pixels
+            assert np.allclose(c1.x, c2.x) # Consecutive optics share x coords
+            assert np.allclose(c1.y, c2.y) # Consecutive optics share y coords
+        self.optics = optics_list
+        return None
+
+    def disable_gradient_update(which_optic):
+        """We might not want to optimize all of the optics in our sequence.
+        """
+        assert which_optic in range(len(self.optics))
+        self.optics[which_optic].allow_gradient_update = False
+
+    def set_2d_input_field(self, input_field, wavelength):
+        """See `Refractive3dOptic.set_2d_input_field()` for details
+        """
+        first_optic, last_optic = self.optics[0], self.optics[-1]
+        first_optic.set_2d_input_field(input_field, wavelength)
+        last_optic.wavelength = wavelength
+        return None
+
+    def set_2d_desired_output_field(self, desired_output_field):
+        """See `Refractive3dOptic.set_2d_desired_output_field()` for details
+        """
+        # This will get overwritten, it's just to trigger input sanitization:
+        self.optics[-1].set_2d_desired_output_field(desired_output_field)
+        # This gets remembered, though:
+        self.desired_output_field = desired_output_field
+        return None
+
+    def gradient_update(self, step_size, z_planes=(1, 2, 3), smoothing_sigma=5):
+        """See `Refractive3dOptic.gradient_update()` for details
+        """
+        assert step_size > 0
+        assert smoothing_sigma >= 0
+        step_size = float(step_size)
+        smoothing_sigma = float(smoothing_sigma)
+        z_planes = [float(z) for z in z_planes]
+        
+        pairs_of_optics = zip(self.optics[:-1], self.optics[1:])
+        final_optic = self.optics[-1]
+        try:
+            for i, (current_optic, next_optic) in enumerate(pairs_of_optics):
+                # Calculate propagation through the current optic:
+                current_optic._calculate_3d_field()
+                # Use the output field of the current optic as the input
+                # field of the next optic:
+                next_optic.set_2d_input_field(
+                    input_field=current_optic._calculated_field_tensor[-1],
+                    wavelength=current_optic.wavelength)
+            # Calculate loss just for the final optic:
+            final_optic.set_2d_desired_output_field(self.desired_output_field)
+            delattr(self, 'desired_output_field')
+            final_optic._calculate_3d_field()
+            final_optic._calculate_loss()
+            # Zero the gradient for all the optics:
+            for i, o in enumerate(self.optics):
+                for c in o._composition_tensor:
+                    if c.grad is not None:
+                        c.grad.zero_()
+            # Backpropagate to populate our gradients:
+            final_optic._loss_tensor.backward()
+            for i, o in enumerate(self.optics):
+                o._gradient_tensor = [c.grad for c in o._composition_tensor]
+            # Update our optics using our gradients:
+            for i, o in enumerate(self.optics):
+                for g, c in zip(o._gradient_tensor, o._composition_tensor):
+                    c.requires_grad_(False)
+                    if o.allow_gradient_update:
+                        update = step_size*smooth_2d(g, sigma=smoothing_sigma)
+                        c.subtract_(update)
+        except:
+            print("While calculating with optic %i, an exception occured:"%(i))
+            raise
+        
+        return None
+
 ##############################################################################
 ## The following utility code is used for the demo in the 'main' block,
 ## it's not critical to the module.
