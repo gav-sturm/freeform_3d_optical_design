@@ -12,7 +12,7 @@ how shall we design these optics?
 
 Using gradient search, just like training a neural network!
 
-This module defines a `Refractive3dObject` class for designing freeform 3D
+This module defines a `Refractive3dOptic` class for designing freeform 3D
 refractive optics, and includes some example code for how to use this
 class in the `example_of_usage()` function below.
 
@@ -31,7 +31,7 @@ if I should add your name to this list!
 ##
 ## You can copy-paste this block into a separate python script to give
 ## you a (hopefully) working example of how to import and use the
-## objects defined in this module.
+## classes and functions defined in this module.
 ##
 ## You'll have to uncomment the initial import block of this example
 ## code, and the final line that calls the `example_of_usage()` function.
@@ -42,7 +42,7 @@ if I should add your name to this list!
 ##
 ##import numpy as np
 ##from beam_propagation import (
-##    Coordinates, Refractive3dObject, FixedIndexMaterial,
+##    Coordinates, Refractive3dOptic, FixedIndexMaterial,
 ##    TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history)
 
 def example_of_usage():
@@ -73,19 +73,19 @@ def example_of_usage():
                          n_xyz=(  128,   128,   128))
     print("Voxel dimensions: %0.3f, %0.3f, %0.3f"%(coords.d_xyz))
 
-    # Use these coordinates to initialize an instance of Refractive3dObject
+    # Use these coordinates to initialize an instance of Refractive3dOptic
     # that will simulate how light changes as it passes through our
-    # refractive object:
-    bp = Refractive3dObject(coords)
+    # refractive optic:
+    bp = Refractive3dOptic(coords)
 
-    # Each voxel of our refractive object is a mixture of materials:
+    # Each voxel of our refractive optic is a mixture of materials:
     air     = FixedIndexMaterial(1)
     polymer = FixedIndexMaterial(1.5)
     bp.set_materials((air, polymer))
 
-    # Initialize our object.
+    # Initialize our optic.
     nx, ny, nz = coords.n_xyz
-    try: # If there's an object saved to disk, pick up where we left off:
+    try: # If there's a concentration saved to disk, pick up where we left off:
         initial_concentration = from_tif('1_concentration.tif')
         assert initial_concentration.shape == (nz, ny, nx)
     except (FileNotFoundError, AssertionError):
@@ -112,7 +112,7 @@ def example_of_usage():
         bp.set_2d_input_field(input_field, wavelength)
         bp.set_2d_desired_output_field(desired_output_field)
 
-        # Simulate propagation through our 3D refractive object,
+        # Simulate propagation through our 3D refractive optic,
         # calculate loss, and calculate a gradient that hopefully will
         # reduce the loss:
         bp.gradient_update(
@@ -163,10 +163,10 @@ def example_of_usage():
 ## above.
 ##############################################################################
 
-class Refractive3dObject:
-    """Simulate light propagation through a 3D refractive object, with autograd.
+class Refractive3dOptic:
+    """Simulate light propagation through a 3D refractive optic, with autograd.
 
-    We use the resulting gradients to update the 3D object, to
+    We use the resulting gradients to update the 3D optic, to
     (hopefully) design an optic with a desired input/output behavior.
     """
     def __init__(self, coordinates, try_cuda=True):
@@ -217,7 +217,7 @@ class Refractive3dObject:
         return None
 
     def set_3d_concentration(self, concentration=None):
-        """`concentration` is a 3D numpy array describing our refractive object.
+        """`concentration` is a 3D numpy array describing our refractive optic.
 
         A concentration of 0 corresponds to a voxel that's entirely the
         'base' material. A concentration of 1 corresponds to a voxel
@@ -243,7 +243,7 @@ class Refractive3dObject:
         return None
 
     def _set_3d_composition(self, composition):
-        """`composition` is a 3D numpy array describing our refractive object.
+        """`composition` is a 3D numpy array describing our refractive optic.
 
         A composition of -inf corresponds to a voxel that's entirely the
         'base' material. A composition of +inf corresponds to a voxel
@@ -259,18 +259,18 @@ class Refractive3dObject:
         return None
 
     def set_2d_input_field(self, input_field, wavelength):
-        """What light are we shining on our refractive object?
+        """What light are we shining on our refractive optic?
 
         `input_field` is a 2D numpy array of complex numbers, specifying
         the amplitude and phase of the input light vs. 2D position at
-        the input plane of our refractive object.
+        the input plane of our refractive optic.
 
         `wavelength` is a positive number in the same units as our
         Coordinates object (e.g. microns). Note that we're specifying
         the wavelength of light our input field in *vacuum*, not in our
         base material. This is used to calculate how the light spreads
         out as it propagates through each layer of our refractive
-        object, and also used to convert composition to index of refraction.
+        optic, and also used to convert composition to index of refraction.
 
         If you're simulating dispersion using a SellmeierMaterial, then
         the units of `wavelength` need to be microns.
@@ -278,7 +278,9 @@ class Refractive3dObject:
         self._require('material_list', 'set_materials')
         nx, ny, nz = self.coordinates.n_xyz
         assert input_field.shape == (ny, nx)
-        assert input_field.dtype == 'complex128'
+        assert (isinstance(input_field, np.ndarray) or
+                isinstance(input_field, torch.Tensor))
+        assert input_field.dtype in ('complex128', torch.complex128)
         assert wavelength > 0
         warning_string = ("""
     You're using a SellmeierMaterial, which expects the units of
@@ -290,7 +292,10 @@ class Refractive3dObject:
                 if not hasattr(self, '_SellmeierMaterial_warning'):
                     print(warning_string)
                     self._SellmeierMaterial_warning = True
-        self.input_field = input_field
+        if isinstance(input_field, np.ndarray):
+            self.input_field = input_field
+        elif isinstance(input_field, torch.Tensor):
+            self._input_field_tensor = input_field
         self.wavelength = wavelength
         self._invalidate(( # Remove these attributes, if they exist:
             'desired_output_field', 'calculated_field',
@@ -299,18 +304,17 @@ class Refractive3dObject:
         return None
 
     def set_2d_desired_output_field(self, desired_output_field):
-        """What light do we wish would exit our refractive object?
+        """What light do we wish would exit our refractive optic?
 
         `desired_output_field` is a 2D numpy array of complex numbers,
         specifying the amplitude and phase of the light vs. 2D position
         that we WISH would be produced at the output plane of our
-        refractive object. We use this to calculate loss (aggregate
+        refractive optic. We use this to calculate loss (aggregate
         error between desired and calculated fields), and we take
-        gradients of this loss to update our object to (hopefully) get
+        gradients of this loss to update our optic to (hopefully) get
         closer to yielding our desired output.
         """
-        self._require('input_field', 'set_2d_input_field')
-        self._require('wavelength',  'set_2d_input_field')
+        self._require('wavelength', 'set_2d_input_field')
         nx, ny, nz = self.coordinates.n_xyz
         assert desired_output_field.shape == (ny, nx)
         assert desired_output_field.dtype == 'complex128'
@@ -320,15 +324,15 @@ class Refractive3dObject:
         return None
 
     def gradient_update(self, step_size, z_planes=(1, 2, 3), smoothing_sigma=5):
-        """Update our object to get closer to our desired behavior.
+        """Update our optic to get closer to our desired behavior.
 
         This is multiple steps rolled into one:
-         * Calculate light propagation through our refractive object.
+         * Calculate light propagation through our refractive optic.
          * Calculate the loss (aggregate difference between calculated
            and desired behavior).
          * Calculate the gradient of this loss (how can we modify our
-           refractive object to improve its performance?).
-         * Update our object with a smoothed (gaussian filter with
+           refractive optic to improve its performance?).
+         * Update our optic with a smoothed (gaussian filter with
            kernel size = `smoothing_sigma`), scaled (multiplied
            by `step_size`) version of this gradient.
 
@@ -351,7 +355,7 @@ class Refractive3dObject:
         self._calculate_gradient()
         # The gradient usually has high-spatial-frequency content that
         # isn't desirable or manufacturable, so we update our refractive
-        # object with a scaled, smoothed version of the gradient:
+        # optic with a scaled, smoothed version of the gradient:
         for g, c in zip(self._gradient_tensor, self._composition_tensor):
             update = step_size * smooth_2d(g, sigma=smoothing_sigma)
             c.requires_grad_(False)
@@ -377,6 +381,7 @@ class Refractive3dObject:
         example.
         """
         for numpy_name in ('composition',
+                           'input_field',
                            'calculated_field',
                            'desired_output_field_3d',
                            'calculated_output_field_3d',
@@ -399,21 +404,23 @@ class Refractive3dObject:
         algorithm we're currently using here to simulate propagation.
         """
         try:
-            self._require('concentration', 'set_3d_concentration')
-        except AttributeError:
             self._require('_composition_tensor', 'set_3d_concentration')
+        except AttributeError:
+            self._require('concentration',       'set_3d_concentration')
+        try:
+            self._require('_input_field_tensor', 'set_2d_input_field')
+        except AttributeError:
+            self._require('input_field',         'set_2d_input_field')
         self._require('material_list', 'set_materials')
-        self._require('input_field',   'set_2d_input_field')
         self._require('wavelength',    'set_2d_input_field')
         # How do amplitude and phase change from one slice to the next?
-        # Regardless of the object, we want to propagate "between"
+        # Regardless of the optic, we want to propagate "between"
         # slices as if we were in a homogenous medium with absorbing
         # boundary conditions:
         phase_mask     = self._propagation_phase_mask(self.coordinates.dz)
         amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
         # Use Torch so we can calculate gradients:
         fft, ifft, exp = torch.fft.fftn, torch.fft.ifftn, torch.exp
-        input_field    = self._to_torch(self.input_field)
         if not hasattr(self, '_composition_tensor'):
             # Note that this is a list of 2D tensors, not a 3D tensor
             # like you might expect. I think this important for the
@@ -421,8 +428,10 @@ class Refractive3dObject:
             # understand pytorch:
             self._composition_tensor = [_to_composition(self._to_torch(c))
                                         for c in self.concentration]
-        # Propagate the light through the object, one slice at a time:
-        calculated_field = [input_field]
+        if not hasattr(self, '_input_field_tensor'):
+            self._input_field_tensor = self._to_torch(self.input_field)
+        # Propagate the light through the optic, one slice at a time:
+        calculated_field = [self._input_field_tensor]
         for c in self._composition_tensor:
             # The composition is the quantity we ultimately want to
             # update via gradient search, so it `requires_grad`:
@@ -444,7 +453,7 @@ class Refractive3dObject:
 
         `z_planes` is a list of z-offsets (in the same units as our
         `Coordinates` object, relative to the output plane of our 3D
-        refractive object) at which we'll calculate the intensity
+        refractive optic) at which we'll calculate the intensity
         mismatch between our calculated field and our desired field.
 
         This 3D intensity-only penalty is a convenient way to penalize
@@ -558,7 +567,7 @@ class Refractive3dObject:
         """Convert our `composition` tensor to phase shifts at each voxel.
 
         The propagation simulation wants to know phase shifts at each
-        voxel due to our refractive object, which depends on the
+        voxel due to our refractive optic, which depends on the
         `composition` at each voxel, the materials that we're mixing, the
         size of the voxel, and the wavelength of the propagating light.
         """
