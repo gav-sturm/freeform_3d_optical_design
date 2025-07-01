@@ -12,9 +12,9 @@ how shall we design these optics?
 
 Using gradient search, just like training a neural network!
 
-This module defines a `Refractive3dOptic` class for designing freeform 3D
-refractive optics, and includes some example code for how to use this
-class in the `example_of_usage()` function below.
+This module defines a `Refractive3dOptic` class for designing freeform
+3D refractive optics, and includes some example code for how to use this
+class in the `example_of_usage` string below.
 
 Written by Andrew G. York, licensed CC-BY 4.0.
 
@@ -33,23 +33,21 @@ if I should add your name to this list!
 ## you a (hopefully) working example of how to import and use the
 ## classes and functions defined in this module.
 ##
-## You'll have to uncomment the initial import block of this example
-## code, and the final line that calls the `example_of_usage()` function.
+## If you execute this module, rather than importing it, it will write a
+## copy of this example code to disk. Use this as your starting point for
+## learning to use the module.
+##
 ##############################################################################
 
-## #These imports are only used for the demo code. If you're
-## #copy-pasting this block, uncomment these import statments:
-##
-##import numpy as np
-##from beam_propagation import (
-##    Coordinates, Refractive3dOptic, FixedIndexMaterial,
-##    TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history)
+example_of_usage = """import time
+import numpy as np
+from beam_propagation import (
+    Coordinates, Refractive3dOptic, FixedIndexMaterial,
+    TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history)
 
 def example_of_usage():
-    """Example code: design a 3D refractive optic with specified input/output.
+    \"""Example code: design a 3D refractive optic with specified input/output.
 
-    You can execute this code by running this module, but for "normal"
-    use, you should import this module, and write your own code.
     Consider copy-pasting this example code to get you started.
 
     In this example, the input/output is simple plane-to-plane imaging
@@ -64,8 +62,7 @@ def example_of_usage():
     3D refractive optic. We use the difference between desired and
     calculated output to calculate our "loss", and use gradients of this
     loss to update our 3D refractive optic.
-    """
-    import time
+    \"""
 
     # Specify our coordinate system, organized via a Coordinates object:
     coords = Coordinates(xyz_i=(-12.7, -12.7,     0),
@@ -76,23 +73,21 @@ def example_of_usage():
     # Use these coordinates to initialize an instance of Refractive3dOptic
     # that will simulate how light changes as it passes through our
     # refractive optic:
-    bp = Refractive3dOptic(coords)
+    ro = Refractive3dOptic(coords)
 
     # Each voxel of our refractive optic is a mixture of materials:
     air     = FixedIndexMaterial(1)
     polymer = FixedIndexMaterial(1.5)
-    bp.set_materials((air, polymer))
+    ro.set_materials((air, polymer))
 
     # Initialize our optic.
-    nx, ny, nz = coords.n_xyz
     try: # If there's a concentration saved to disk, pick up where we left off:
-        initial_concentration = from_tif('1_concentration.tif')
-        assert initial_concentration.shape == (nz, ny, nx)
-    except (FileNotFoundError, AssertionError):
-        # Otherwise, use a 50/50 mixture at each voxel:
-        print("Using default initial concentration.")
-        initial_concentration = 0.5*np.ones((nz, ny, nx))
-    bp.set_3d_concentration(initial_concentration)
+        fname = '01_concentration.tif'
+        initial_concentration = from_tif(fname)
+        ro.set_3d_concentration(initial_concentration)
+        print("Using initial concentration from:", fname)
+    except FileNotFoundError:
+        print("Using default concentration (50/50 mixture at each voxel).")
 
     # Make a source to generate training data. In this case, the
     # training data is for a simple plane-to-plane inverting imaging
@@ -102,55 +97,55 @@ def example_of_usage():
     wavelength = 1
     divergence_angle_degrees = 15
     loss_history = []
-    for iteration in range(10000):
+    for iteration in range(int(1e6)): # Run for a loooong time
         start_time = time.perf_counter()
         
         # Use our data source to generate random input/output pairs:
         x0, y0 = data_source.random_point_in_a_circle()
         input_field, desired_output_field = data_source.input_output_pair(
             x0, y0, wavelength, divergence_angle_degrees)
-        bp.set_2d_input_field(input_field, wavelength)
-        bp.set_2d_desired_output_field(desired_output_field)
+        ro.set_2d_input_field(input_field, wavelength)
+        ro.set_2d_desired_output_field(desired_output_field)
 
         # Simulate propagation through our 3D refractive optic,
         # calculate loss, and calculate a gradient that hopefully will
         # reduce the loss:
-        bp.gradient_update(
+        ro.gradient_update(
             step_size=100,
             z_planes=(1, 2, 3),
             smoothing_sigma=5)
-        loss_history.append((x0, y0, bp.loss))
+        loss_history.append((x0, y0, ro.loss))
 
         end_time = time.perf_counter()
-        print("At iteration", iteration, "the loss is %0.4f"%(bp.loss),
+        print("At iteration", iteration, "the loss is %0.4f"%(ro.loss),
               "(%0.2f ms elapsed)"%(1000*(end_time - start_time)))
 
         # Every so often, output some intermediate state, so we can
         # monitor our progress. You can use ImageJ
         # ( https://imagej.net/ij/ ) to view the TIF files:
         if iteration % 50 == 0:
-            bp.update_attributes()
+            ro.update_attributes()
             print("Saving TIFs etc...", end='')
-            to_tif('00_composition.tif',          bp.composition)
-            to_tif('01_concentration.tif',        bp.concentration)
-            to_tif('02_concentration_xz.tif',     bp.concentration[:,ny//2,:])
-            to_tif('03_input_field.tif',          bp.input_field)
-            to_tif('04_desired_output_field.tif', bp.desired_output_field)
+            to_tif('00_composition.tif',          ro.composition)
+            to_tif('01_concentration.tif',        ro.concentration)
+            to_tif('02_concentration_xz.tif',
+                   ro.concentration[:, ro.coordinates.ny//2, :])
+            to_tif('03_input_field.tif',          ro.input_field)
+            to_tif('04_desired_output_field.tif', ro.desired_output_field)
             to_tif('05_calculated_field.tif',
-                   np.abs(bp.calculated_field))
+                   np.abs(ro.calculated_field))
             to_tif('06_desired_output_field_3d',
-                   np.abs(bp.desired_output_field_3d))
+                   np.abs(ro.desired_output_field_3d))
             to_tif('07_calculated_output_field_3d',
-                   np.abs(bp.calculated_output_field_3d))
-            to_tif('08_error_3d.tif', bp.error_3d)
-            to_tif('09_gradient.tif', bp.gradient)
+                   np.abs(ro.calculated_output_field_3d))
+            to_tif('08_error_3d.tif', ro.error_3d)
+            to_tif('09_gradient.tif', ro.gradient)
             plot_loss_history(loss_history, '10_loss_history.png')
             print("done.")
 
-## #Uncomment this last line also, if you're copy-pasting into your own
-## #script:
-##
-##example_of_usage()
+if __name__ == '__main__':
+    example_of_usage()
+"""
 
 ##############################################################################
 ## END EXAMPLE CODE
@@ -1024,4 +1019,18 @@ def gaussian_beam_2d(x, y, x0, y0, phi, theta, wavelength, w):
     return field.squeeze()
 
 if __name__ == '__main__':
-    example_of_usage()
+    """Save our example code to disk, so you can execute it.
+    """
+    from pathlib import Path
+
+    print("Saving 'example_of_usage.py' to disk... ", end='')
+    this_module = Path(__file__).name
+    working_directory = Path(__file__).parent
+    filename = working_directory / "example_of_usage.py"
+    with open(filename, 'w') as f:
+        f.write(example_of_usage)
+    print("done.")
+    print("\nOpen, read, and execute 'example_of_usage.py'",
+          "for an example of how to import\nand use the objects defined in",
+          this_module, "\n")
+    print("If you edit 'example_of_usage.py', make sure you rename it.")
