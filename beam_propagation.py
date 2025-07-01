@@ -292,6 +292,7 @@ class Refractive3dOptic:
                 if not hasattr(self, '_SellmeierMaterial_warning'):
                     print(warning_string)
                     self._SellmeierMaterial_warning = True
+        self._invalidate(('input_field',)) # Deletes both array and tensor
         if isinstance(input_field, np.ndarray):
             self.input_field = input_field
         elif isinstance(input_field, torch.Tensor):
