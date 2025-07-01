@@ -27,15 +27,11 @@ if I should add your name to this list!
 ##############################################################################
 ## BEGIN EXAMPLE CODE
 ##
-##The following block of code is an example of usage.
-##
-## You can copy-paste this block into a separate python script to give
-## you a (hopefully) working example of how to import and use the
-## classes and functions defined in this module.
+## The following block of code is an example of usage.
 ##
 ## If you execute this module, rather than importing it, it will write a
-## copy of this example code to disk. Use this as your starting point for
-## learning to use the module.
+## copy of this example code to disk as a separate python script. Use
+## this as your starting point for learning to use the module.
 ##
 ##############################################################################
 
@@ -913,6 +909,10 @@ class RefractiveOpticSequence:
         
         return None
 
+    def update_attributes(self, delete_tensors=True):
+        for op in self.optics:
+            op.update_attributes(delete_tensors=delete_tensors)
+
 ##############################################################################
 ## The following utility code is used for the demo in the 'main' block,
 ## it's not critical to the module.
@@ -937,6 +937,16 @@ def to_tif(filename, x):
 def from_tif(filename):
     import tifffile as tf
     return tf.imread(output_directory() / filename)
+
+def attributes_to_tifs(refractive_optic_sequence, list_of_attributes):
+    assert isinstance(refractive_optic_sequence, RefractiveOpticSequence)
+    for n, optic in enumerate(refractive_optic_sequence.optics):
+        for i, attribute_name in enumerate(list_of_attributes):
+            if hasattr(optic, attribute_name):
+                attr = getattr(optic, attribute_name)
+                filename = "%02d_optic_%02d_%s.tif"%(
+                    i, n, attribute_name)
+                to_tif(filename, attr)
 
 def plot_loss_history(loss_history, filename):
     import matplotlib as mpl
