@@ -944,6 +944,8 @@ def attributes_to_tifs(refractive_optic_sequence, list_of_attributes):
         for i, attribute_name in enumerate(list_of_attributes):
             if hasattr(optic, attribute_name):
                 attr = getattr(optic, attribute_name)
+                if np.iscomplexobj(attr):
+                    attr = np.abs(attr)
                 filename = "%02d_optic_%02d_%s.tif"%(
                     i, n, attribute_name)
                 to_tif(filename, attr)
