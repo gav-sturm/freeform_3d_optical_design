@@ -410,7 +410,7 @@ class Refractive3dOptic:
         # slices as if we were in a homogenous medium with absorbing
         # boundary conditions:
         phase_mask     = self._propagation_phase_mask(self.coordinates.dz)
-        amplitude_mask = self._apodization_amplitude_mask(edge_pixels=5)
+        amplitude_mask = self._apodization_amplitude_mask()
         # Use Torch so we can calculate gradients:
         fft, ifft, exp = torch.fft.fftn, torch.fft.ifftn, torch.exp
         if not hasattr(self, '_composition_tensor'):
@@ -526,7 +526,7 @@ class Refractive3dOptic:
         phase_mask = exp(1j*kz*distance)
         return phase_mask
 
-    def _apodization_amplitude_mask(self, edge_pixels=5, edge_value=0.5):
+    def _apodization_amplitude_mask(self):
         """For simulating propagation with non-periodic boundary conditions.
 
         We want absorptive boundary conditions, not reflective or
@@ -537,7 +537,12 @@ class Refractive3dOptic:
         This is only used inside other private methods, so its
         implemented in torch Tensors, not numpy arrays.
         """
-        edge_pixels = int(edge_pixels)
+        if not hasattr(self, '_apodization_edge_pixels'):
+            self._apodization_edge_pixels = 5
+        if not hasattr(self, '_apodization_edge_value'):
+            self._apodization_edge_value = 0.5
+        edge_pixels = int(self._apodization_edge_pixels)
+        edge_value = float(self._apodization_edge_value)
         assert edge_pixels > 0
         assert edge_value >= 0
         assert edge_value <= 1
