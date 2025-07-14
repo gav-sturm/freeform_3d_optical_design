@@ -343,7 +343,7 @@ class Refractive3dOptic:
         # but copying to and from the GPU is expensive, so we stay
         # entirely in torch for these steps:        
         self._calculate_3d_field()
-        self._calculate_loss()
+        self._calculate_loss(z_planes=z_planes)
         self._calculate_gradient()
         # The gradient usually has high-spatial-frequency content that
         # isn't desirable or manufacturable, so we update our refractive
@@ -890,7 +890,7 @@ class RefractiveOpticSequence:
             final_optic.set_2d_desired_output_field(self.desired_output_field)
             delattr(self, 'desired_output_field')
             final_optic._calculate_3d_field()
-            final_optic._calculate_loss()
+            final_optic._calculate_loss(z_planes=z_planes)
             self.loss = np.copy(final_optic.loss)
             # Zero the gradient for all the optics:
             for i, o in enumerate(self.optics):
