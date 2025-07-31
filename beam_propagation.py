@@ -581,8 +581,7 @@ class Refractive3dOptic:
         index_1, index_2 = self.index_list
         index_minus_1 = (index_1 - 1) + (index_2 - index_1)*concentration
         
-        # The default material is nondispersive, meaning the phase
-        # shifts scale with dz and inversely with wavelength:
+        # The phase shift scales with dz and inversely with wavelength:
         phase_shifts = 2*pi * dz * index_minus_1 / wavelength
         
         return phase_shifts # This is a pytorch Tensor (which allows autograd)
