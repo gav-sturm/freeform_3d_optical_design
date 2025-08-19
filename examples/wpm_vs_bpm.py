@@ -1,6 +1,9 @@
 import torch
 import numpy as np
 
+
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 def main():
     # Coordinates
     xi, xf = -20, 20
@@ -27,11 +30,13 @@ def main():
     input_field = gaussian_beam_2d(
         x=x, y=y, x0=0, y0=0, phi=0, theta=0, wavelength=wavelength, w=0.5)
     to_tif('input_field.tif', input_field)
+    input_field = input_field.to(DEVICE)
 
     # Simulate with slow but accurate WPM:
     try:
-         calculated_field_wpm_abs = from_tif('calculated_field_wpm.tif'
-                                             ).astype('float64')
+        calculated_field_wpm_abs = from_tif('calculated_field_wpm.tif'
+                                            ).astype('float64')
+        calculated_field_wpm_abs = torch.from_numpy(calculated_field_wpm_abs).to(DEVICE)
     except FileNotFoundError:
         calculated_field_wpm = wpm(
             input_field=input_field,
@@ -164,6 +169,7 @@ def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, n_bucket_size:
         next_field = z_interpolate(known_values=next_field_reference_stack,
                                    known_z=n_range, desired_z=n)
         calculated_field.append(next_field.clone())
+    print('done')
     return calculated_field
 
 """
@@ -225,15 +231,7 @@ def output_directory():
     
 def to_tif(filename, x):
     import tifffile as tf
-    if hasattr(x, 'detach'):
-        x = x.detach()
-    if hasattr(x, 'real'):
-        x = x.real
-    if hasattr(x, 'detach'):
-        x = x.detach().cpu().numpy()
-    else:
-        x = np.asarray(x)
-    x = x.astype('float32')
+    x = x.detach().cpu().numpy().real.astype('float32')
     if x.ndim == 3:
         x = np.expand_dims(x, axis=(0, 2))
     tf.imwrite(output_directory() / filename, x, imagej=True)
