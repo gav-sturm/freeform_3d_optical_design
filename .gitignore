@@ -1,0 +1,5 @@
+*.tif
+*.png
+uv.lock
+__pycache__
+.DS_Store
