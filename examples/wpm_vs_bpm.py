@@ -53,18 +53,18 @@ def main():
     to_tif('calculated_field_bpm.tif', calculated_field_bpm_abs)
 
     # Simulate with fast(?) but accurate(?) BPM:
-    for nn in (2, 4, 8, 16, 32, 64, 128):
+    for nn_bucket_size_factor in range(8):
         calculated_field = fast_wpm(
             input_field=input_field,
             wavelength=wavelength,
             index_of_refraction=maxwell_fisheye,
             d_xyz=(dx, dy, dz),
-            nn=nn)
+            n_bucket_size=2.0 ** -nn_bucket_size_factor)
         calculated_field_abs = np.abs(calculated_field)
         amplitude_error = calculated_field_abs - calculated_field_wpm_abs
-        to_tif('amplitude_error_%03d.tif'%(nn), amplitude_error)
+        to_tif('amplitude_error_%03d.tif' % (nn_bucket_size_factor), amplitude_error)
 ##        to_tif('calculated_field_%03d.tif'%(nn), np.abs(calculated_field))
-        to_tif('calculated_field_%03d_xz.tif'%(nn),
+        to_tif('calculated_field_%03d_xz.tif' % (nn_bucket_size_factor),
                np.abs(calculated_field).sum(axis=1))
 
 def bpm(input_field, wavelength, index_of_refraction, d_xyz):
@@ -134,7 +134,7 @@ def wpm(input_field, wavelength, index_of_refraction, d_xyz):
     calculated_field = np.stack(calculated_field)
     return calculated_field
     
-def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, nn):
+def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, n_bucket_size: float = 1 / 64):
     # Try to WPM? ...the sorta-fast way
     fft, ifft, fftfreq = np.fft.fftn, np.fft.ifftn, np.fft.fftfreq
     sqrt, exp, pi, nan_to_num = np.sqrt, np.exp, np.pi, np.nan_to_num
@@ -150,8 +150,12 @@ def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, nn):
         # It's expensive to propagate in arbitrary inhomogenous
         # refractive indices, so instead, we'll simulate propagation in
         # a limited number of homogenous 'reference' materials:
-        n_min, n_max = n.min(), n.max() +1e-6
-        n_range = np.linspace(n_min, n_max, nn).reshape(nn, 1, 1)
+        n_min, n_max = n.min(), n.max() + 1e-6
+        n_buckets = max(2, int((n_max-n_min)/n_bucket_size))
+        n_range = np.linspace(n_min, n_max, n_buckets)
+        n_range = np.expand_dims(n_range, axis=(1, 2))
+        # print(f"n_min: {n_min}, n_max: {n_max}, n_bucket_size: {n_bucket_size}, n_buckets: {n_buckets}")
+        # print(f"n_range: {n_range.shape}")
         kx = (2*pi/dx)*fftfreq(nx).reshape(1, 1, nx)
         ky = (2*pi/dx)*fftfreq(ny).reshape(1, ny, 1)
         kz_sq = (k*n_range)**2 - kx**2 - ky**2 # Might be negative, so...
