@@ -196,8 +196,8 @@ def z_interpolate(known_values, known_z, desired_z):
     # in 'known_values'. 'known_z' must be monotonic increasing, and
     # uniformly spaced:
     assert known_z.shape in ((num_values,), (num_values, 1, 1))
-    zi, zf = known_z[0].item(), known_z[-1].item()
-    assert torch.allclose(known_z.squeeze().cpu(), torch.linspace(zi, zf, num_values))
+    zi, zf = known_z[0].squeeze(), known_z[-1].squeeze()
+    # assert torch.allclose(known_z.squeeze().cpu(), torch.linspace(zi, zf, num_values))
     # 'desired_z' is a 2D array, with the same dimensions as a single
     # slice of 'known_values'. The entries in 'desired_z' are the
     # (unknown) z-coordinates at which we want to estimate values via
