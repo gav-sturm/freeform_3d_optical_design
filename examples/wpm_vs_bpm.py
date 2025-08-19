@@ -58,6 +58,11 @@ def main():
     to_tif('amplitude_error_bpm.tif', amplitude_error)
     to_tif('calculated_field_bpm.tif', calculated_field_bpm_abs)
 
+    # prof = torch.profiler.profile(
+    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
+    # )
+    # prof.start()
+
     # Simulate with fast(?) but accurate(?) BPM:
     for nn_bucket_size_factor in range(8):
         calculated_field = fast_wpm(
@@ -73,6 +78,9 @@ def main():
 ##        to_tif('calculated_field_%03d.tif'%(nn), np.abs(calculated_field))
         to_tif('calculated_field_%03d_xz.tif' % (nn_bucket_size_factor),
                torch.abs(calculated_field).sum(axis=1))
+    # prof.step()
+    # prof.stop()
+    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1))
 
 def bpm(input_field, wavelength, index_of_refraction, d_xyz):
     """Calculate light propagation in a 3D refractive object with the BPM
