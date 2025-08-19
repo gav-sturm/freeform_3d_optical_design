@@ -1,5 +1,5 @@
+import torch
 import numpy as np
-##import torch
 
 def main():
     # Coordinates
@@ -7,9 +7,9 @@ def main():
     yi, yf = -20, 20
     zi, zf = -20, 20
     nx, ny, nz = 101, 101, 101
-    x = np.linspace(xi, xf, nx).reshape( 1,  1, nx)
-    y = np.linspace(yi, yf, ny).reshape( 1, ny,  1)
-    z = np.linspace(zi, zf, nz).reshape(nz,  1,  1)
+    x = torch.linspace(xi, xf, nx).reshape( 1,  1, nx)
+    y = torch.linspace(yi, yf, ny).reshape( 1, ny,  1)
+    z = torch.linspace(zi, zf, nz).reshape(nz,  1,  1)
     dx = (xf - xi)/(nx-1)
     dy = (yf - yi)/(ny-1)
     dz = (zf - zi)/(nz-1)
@@ -38,7 +38,7 @@ def main():
             wavelength=wavelength,
             index_of_refraction=maxwell_fisheye,
             d_xyz=(dx, dy, dz))
-        calculated_field_wpm_abs = np.abs(calculated_field_wpm)
+        calculated_field_wpm_abs = torch.abs(calculated_field_wpm)
         to_tif('calculated_field_wpm.tif', calculated_field_wpm_abs)
 
     # Simulate with fast but inaccurate BPM:
@@ -47,7 +47,7 @@ def main():
         wavelength=wavelength,
         index_of_refraction=maxwell_fisheye,
         d_xyz=(dx, dy, dz))
-    calculated_field_bpm_abs = np.abs(calculated_field_bpm)
+    calculated_field_bpm_abs = torch.abs(calculated_field_bpm)
     amplitude_error = calculated_field_bpm_abs - calculated_field_wpm_abs
     to_tif('amplitude_error_bpm.tif', amplitude_error)
     to_tif('calculated_field_bpm.tif', calculated_field_bpm_abs)
@@ -60,25 +60,24 @@ def main():
             index_of_refraction=maxwell_fisheye,
             d_xyz=(dx, dy, dz),
             nn=nn)
-        calculated_field_abs = np.abs(calculated_field)
+        calculated_field = torch.stack(calculated_field)
+        calculated_field_abs = torch.abs(calculated_field)
         amplitude_error = calculated_field_abs - calculated_field_wpm_abs
         to_tif('amplitude_error_%03d.tif'%(nn), amplitude_error)
 ##        to_tif('calculated_field_%03d.tif'%(nn), np.abs(calculated_field))
         to_tif('calculated_field_%03d_xz.tif'%(nn),
-               np.abs(calculated_field).sum(axis=1))
+               torch.abs(calculated_field).sum(axis=1))
 
 def bpm(input_field, wavelength, index_of_refraction, d_xyz):
     """Calculate light propagation in a 3D refractive object with the BPM
 
     (BPM is the "beam propagation method")
     """
-    sqrt, exp, pi, nan_to_num = np.sqrt, np.exp, np.pi, np.nan_to_num
+    sqrt, exp, pi = torch.sqrt, torch.exp, torch.pi
     k = 2*pi/wavelength
-    fft, ifft, fftfreq = np.fft.fftn, np.fft.ifftn, np.fft.fftfreq
+    fft, ifft = torch.fft.fftn, torch.fft.ifftn
     dx, dy, dz = d_xyz
     nz, ny, nx = index_of_refraction.shape
-    xp = np.arange(nx).reshape(1, nx)
-    yp = np.arange(ny).reshape(ny, 1)
     calculated_field = [input_field]
     print("Calculating fast (but wrong?) BPM propagation...", sep='', end='')
     for which_z in range(nz):
@@ -89,14 +88,14 @@ def bpm(input_field, wavelength, index_of_refraction, d_xyz):
         n_mean = n.mean()
         delta_n = (n - n_mean)
         kn_sq = (k*n_mean)**2 + 0j # Complex so the sqrt can give imaginary
-        kx = (2*pi/dx)*fftfreq(nx).reshape(1, nx)
-        ky = (2*pi/dy)*fftfreq(ny).reshape(ny, 1)
+        kx = (2*pi/dx)*torch.fft.fftfreq(nx).reshape(1, nx)
+        ky = (2*pi/dy)*torch.fft.fftfreq(ny).reshape(ny, 1)
         kz = sqrt(kn_sq - kx**2 - ky**2)
         phase_shifts = exp(1j*k*delta_n*dz)
         next_field = phase_shifts * ifft(last_field_ft * exp(1j*kz*dz))
         calculated_field.append(next_field)
     print('done')
-    calculated_field = np.stack(calculated_field)
+    calculated_field = torch.stack(calculated_field)
     return calculated_field
 
 
@@ -105,12 +104,12 @@ def wpm(input_field, wavelength, index_of_refraction, d_xyz):
 
     (WPM is the "plane wave propagation method")
     """
-    sqrt, exp, pi, nan_to_num = np.sqrt, np.exp, np.pi, np.nan_to_num
-    k, fft, fftfreq = 2*pi/wavelength, np.fft.fftn, np.fft.fftfreq
+    sqrt, exp, pi = torch.sqrt, torch.exp, torch.pi
+    k, fft = 2*pi/wavelength, torch.fft.fftn
     dx, dy, dz = d_xyz
     nz, ny, nx = index_of_refraction.shape
-    xp = np.arange(nx).reshape(1, nx)
-    yp = np.arange(ny).reshape(ny, 1)
+    xp = torch.arange(nx).reshape(1, nx)
+    yp = torch.arange(ny).reshape(ny, 1)
     calculated_field = [input_field]
     print("Calculating (faster? but accurate?) WPM propagation...",
           sep='', end='')
@@ -118,26 +117,26 @@ def wpm(input_field, wavelength, index_of_refraction, d_xyz):
         print("Slice ", which_z, "...", sep='', end='')
         last_field = calculated_field[-1]
         last_field_ft = fft(last_field) / (ny*nx)
-        next_field = np.zeros_like(last_field)
+        next_field = torch.zeros_like(last_field)
         n = index_of_refraction[which_z, :, :]
         kn_sq = (k*n)**2 + 0j # Make it complex so the sqrt can give imaginary
-        for i, fx in enumerate(fftfreq(nx)):
+        for i, fx in enumerate(torch.fft.fftfreq(nx)):
             print('.', sep='', end='')
             kx = 2*pi*fx/dx
-            for j, fy in enumerate(fftfreq(ny)):
+            for j, fy in enumerate(torch.fft.fftfreq(ny)):
                 ky = 2*pi*fy/dy
                 kz = sqrt(kn_sq - kx**2 - ky**2)
                 next_field += (last_field_ft[j, i] *
                                exp(1j*(kx*xp*dx + ky*yp*dy + kz*dz)))
         calculated_field.append(next_field)
         print('done')
-    calculated_field = np.stack(calculated_field)
+    calculated_field = torch.stack(calculated_field)
     return calculated_field
     
 def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, nn):
     # Try to WPM? ...the sorta-fast way
-    fft, ifft, fftfreq = np.fft.fftn, np.fft.ifftn, np.fft.fftfreq
-    sqrt, exp, pi, nan_to_num = np.sqrt, np.exp, np.pi, np.nan_to_num
+    fft, ifft = torch.fft.fftn, torch.fft.ifftn
+    sqrt, exp, pi = torch.sqrt, torch.exp, torch.pi
     k = 2*pi/wavelength
     dx, dy, dz = d_xyz
     nz, ny, nx = index_of_refraction.shape
@@ -150,19 +149,18 @@ def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, nn):
         # It's expensive to propagate in arbitrary inhomogenous
         # refractive indices, so instead, we'll simulate propagation in
         # a limited number of homogenous 'reference' materials:
-        n_min, n_max = n.min(), n.max() +1e-6
-        n_range = np.linspace(n_min, n_max, nn).reshape(nn, 1, 1)
-        kx = (2*pi/dx)*fftfreq(nx).reshape(1, 1, nx)
-        ky = (2*pi/dx)*fftfreq(ny).reshape(1, ny, 1)
+        n_min, n_max = n.min(), n.max() + 1e-6
+        n_range = torch.linspace(n_min, n_max, nn).reshape(nn, 1, 1)
+        kx = (2*pi/dx)*torch.fft.fftfreq(nx).reshape(1, 1, nx)
+        ky = (2*pi/dx)*torch.fft.fftfreq(ny).reshape(1, ny, 1)
         kz_sq = (k*n_range)**2 - kx**2 - ky**2 # Might be negative, so...
-        kz = sqrt(kz_sq.astype('complex128')) # complex input -> complex output
+        kz = sqrt(kz_sq.to(torch.complex128)) # complex input -> complex output
         next_field_reference_stack_ft = last_field_ft * exp(1j*kz*dz)
         next_field_reference_stack = ifft(next_field_reference_stack_ft,
-                                          axes=(1, 2))
+                                          dim=(1, 2))
         next_field = z_interpolate(known_values=next_field_reference_stack,
                                    known_z=n_range, desired_z=n)
-        calculated_field.append(next_field.copy())
-    print('done')
+        calculated_field.append(next_field.clone())
     return calculated_field
 
 """
@@ -187,8 +185,8 @@ def z_interpolate(known_values, known_z, desired_z):
     # in 'known_values'. 'known_z' must be monotonic increasing, and
     # uniformly spaced:
     assert known_z.shape in ((num_values,), (num_values, 1, 1))
-    zi, zf = known_z[0], known_z[-1]
-    assert np.allclose(known_z, np.linspace(zi, zf, num_values))
+    zi, zf = known_z[0].item(), known_z[-1].item()
+    assert torch.allclose(known_z.squeeze(), torch.linspace(zi, zf, num_values))
     # 'desired_z' is a 2D array, with the same dimensions as a single
     # slice of 'known_values'. The entries in 'desired_z' are the
     # (unknown) z-coordinates at which we want to estimate values via
@@ -199,13 +197,14 @@ def z_interpolate(known_values, known_z, desired_z):
     assert desired_z.max() < zf
     
     desired_z_normalized = (desired_z - zi) * (num_intervals / (zf - zi))
-    remainder, which_interval = np.modf(desired_z_normalized)
-    which_interval = which_interval.astype('int64').reshape(1, ny, nx)
+    which_interval = torch.floor(desired_z_normalized)
+    remainder = desired_z_normalized - which_interval
+    which_interval = which_interval.to(torch.int64).reshape(1, ny, nx)
 ##    to_tif('which_interval.tif', which_interval)
 ##    to_tif('remainder.tif', remainder)
 
-    lo_bound_vals = np.take_along_axis(known_values, which_interval,   axis=0)
-    hi_bound_vals = np.take_along_axis(known_values, which_interval+1, axis=0)
+    lo_bound_vals = torch.gather(known_values, 0, which_interval)
+    hi_bound_vals = torch.gather(known_values, 0, which_interval+1)
 ##    to_tif('lower_bound_values.tif', lo_bound_vals)
 ##    to_tif('upper_bound_values.tif', hi_bound_vals)
 
@@ -225,7 +224,13 @@ def to_tif(filename, x):
     import tifffile as tf
     if hasattr(x, 'detach'):
         x = x.detach()
-    x = np.asarray(x).real.astype('float32')
+    if hasattr(x, 'real'):
+        x = x.real
+    if hasattr(x, 'detach'):
+        x = x.detach().cpu().numpy()
+    else:
+        x = np.asarray(x)
+    x = x.astype('float32')
     if x.ndim == 3:
         x = np.expand_dims(x, axis=(0, 2))
     tf.imwrite(output_directory() / filename, x, imagej=True)
@@ -236,9 +241,11 @@ def from_tif(filename):
 
 def gaussian_beam_2d(x, y, x0, y0, phi, theta, wavelength, w):
     # Local nicknames:
-    exp, sin, cos, pi = np.exp, np.sin, np.cos, np.pi
+    exp, sin, cos, pi = torch.exp, torch.sin, torch.cos, torch.pi
     # Simple math:
     k = 2*pi/wavelength
+    theta = torch.tensor(theta)
+    phi = torch.tensor(phi)
     kx = k*sin(theta)*cos(phi)
     ky = k*sin(theta)*sin(phi)
     r_sq = (x-x0)**2 + (y-y0)**2
