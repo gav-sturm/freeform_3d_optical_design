@@ -71,11 +71,12 @@ class VisData:
 
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
+        logger.info(f"Searching for output files in {base_dir.resolve()}")
         # Known file names
         self.paths: dict[str, Path] = {
             # Scalars / volumes
             "composition": base_dir / "composition.tif",
-            "concentration": base_dir / "concentration.tif",
+            "concentration": base_dir / "01_concentration.tif",
             # Input field (2D)
             "input_field_amplitude": base_dir / "input_field_amplitude.tif",
             "input_field_phase": base_dir / "input_field_phase.tif",
@@ -94,9 +95,6 @@ class VisData:
             # PNG
             "loss_history": base_dir / "10_loss_history.png",
         }
-
-        for name, path in self.paths.items():
-            print(path.resolve())
 
         # Data containers
         self.tensors: dict[str, Optional[np.ndarray]] = {k: None for k in self.paths if k.endswith(".tif") is False}

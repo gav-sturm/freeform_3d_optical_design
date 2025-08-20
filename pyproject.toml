@@ -16,3 +16,15 @@ dependencies = [
     "tifffile>=2025.6.11",
     "torch>=2.8.0",
 ]
+
+[project.scripts]
+gui="gui.main:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = ["gui"]
+
+[tool.setuptools.package-dir]
+"" = "."

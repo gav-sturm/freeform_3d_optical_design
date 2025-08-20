@@ -1,5 +1,5 @@
 from qtpy.QtCore import QObject, QTimer, Signal
-from visdata import VisData
+from gui.visdata import VisData
 from typing import Optional
 from pathlib import Path
 import logging
