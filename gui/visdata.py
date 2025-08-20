@@ -76,7 +76,7 @@ class VisData:
         self.paths: dict[str, Path] = {
             # Scalars / volumes
             "composition": base_dir / "composition.tif",
-            "concentration": base_dir / "01_concentration.tif",
+            "concentration": base_dir / "concentration.tif",
             # Input field (2D)
             "input_field_amplitude": base_dir / "input_field_amplitude.tif",
             "input_field_phase": base_dir / "input_field_phase.tif",

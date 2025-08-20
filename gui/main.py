@@ -22,7 +22,7 @@ from qtpy.QtWidgets import (
 
 from gui.visdata import VisData
 from gui.watcher import DataWatcher
-from gui.visualization import Visualization, PngVisualization, VolumeOrthoSlicesVisualization
+from gui.visualization import Visualization, PngVisualization, VolumeOrthoSlicesVisualization, PropagationViewer
 
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 POLL_INTERVAL_MS = 1000
@@ -91,7 +91,8 @@ class MainWindow(QMainWindow):
 
         visualizations = [
             PngVisualization("loss_history_image").rename("Loss History"),
-            VolumeOrthoSlicesVisualization("concentration").rename("Material Orthoview")
+            VolumeOrthoSlicesVisualization("concentration").rename("Material Orthoview"),
+            PropagationViewer("calculated_field_complex", "desired_output_field_complex").rename("Light Propagation")
         ]
 
         if isinstance(os.environ.get("DEBUG", None), str):

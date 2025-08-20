@@ -6,9 +6,9 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QWidget,
     QLabel,
-    QSizePolicy,
     QVBoxLayout,
     QHBoxLayout,
+    QSizePolicy,
     QSlider,
     QGroupBox,
 )
@@ -16,6 +16,7 @@ from qtpy.QtGui import QPixmap, QImage
 
 from gui.visdata import VisData
 from gui.visualization.visualization import Visualization
+from gui.visualization.scaled_label import ScaledLabel
 
 
 class VolumeOrthoSlicesVisualization(Visualization):
@@ -53,16 +54,16 @@ class VolumeOrthoSlicesVisualization(Visualization):
         imgs_group.setLayout(imgs_layout)
 
         self._lbl_xy_title = QLabel("XY (z=0)")
-        self._img_xy = QLabel("No data yet.")
-        self._setup_img_label(self._img_xy)
+        self._img_xy = ScaledLabel("No data yet.")
+        # self._setup_img_label(self._img_xy)
 
         self._lbl_xz_title = QLabel("XZ (y=0)")
-        self._img_xz = QLabel("No data yet.")
-        self._setup_img_label(self._img_xz)
+        self._img_xz = ScaledLabel("No data yet.")
+        # self._setup_img_label(self._img_xz)
 
         self._lbl_yz_title = QLabel("YZ (x=0)")
-        self._img_yz = QLabel("No data yet.")
-        self._setup_img_label(self._img_yz)
+        self._img_yz = ScaledLabel("No data yet.")
+        # self._setup_img_label(self._img_yz)
 
         imgs_layout.addLayout(self._column(self._lbl_xy_title, self._img_xy))
         imgs_layout.addLayout(self._column(self._lbl_xz_title, self._img_xz))
@@ -98,15 +99,12 @@ class VolumeOrthoSlicesVisualization(Visualization):
 
         root.addWidget(sliders_group)
 
-    def _setup_img_label(self, label: QLabel):
-        label.setAlignment(Qt.AlignCenter)
-        label.setScaledContents(False)
-        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
     def _column(self, title_label: QLabel, image_label: QLabel) -> QVBoxLayout:
         col = QVBoxLayout()
-        col.addWidget(title_label, alignment=Qt.AlignCenter)
-        col.addWidget(image_label, alignment=Qt.AlignCenter)
+        col.addWidget(title_label, 0, Qt.AlignHCenter)  # only center the title
+        col.addWidget(image_label)                      # <-- no alignment, allow stretch
+        col.setStretch(0, 0)                            # title doesn't stretch
+        col.setStretch(1, 1)                            # image takes all extra vertical space
         return col
 
     def update(self, data: VisData):
@@ -246,4 +244,3 @@ class VolumeOrthoSlicesVisualization(Visualization):
         qimg = self._qimage_from_u8(u8)
         pix = QPixmap.fromImage(qimg)
         label.setPixmap(pix)
-        label.setFixedSize(pix.size())
