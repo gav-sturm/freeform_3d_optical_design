@@ -9,7 +9,7 @@ def main():
     xi, xf = -20, 20
     yi, yf = -20, 20
     zi, zf = -20, 20
-    nx, ny, nz = 101, 101, 101
+    nx, ny, nz = 128, 128, 128
     x = torch.linspace(xi, xf, nx).reshape( 1,  1, nx).to(DEVICE)
     y = torch.linspace(yi, yf, ny).reshape( 1, ny,  1).to(DEVICE)
     z = torch.linspace(zi, zf, nz).reshape(nz,  1,  1).to(DEVICE)
@@ -35,33 +35,33 @@ def main():
     to_tif('input_field.tif', input_field)
     input_field = input_field.to(DEVICE)
 
-    # Simulate with slow but accurate WPM:
-    try:
-        calculated_field_wpm_abs = from_tif('calculated_field_wpm.tif').to(torch.float64)
-    except FileNotFoundError:
-        calculated_field_wpm = wpm(
-            input_field=input_field,
-            wavelength=wavelength,
-            index_of_refraction=maxwell_fisheye,
-            d_xyz=(dx, dy, dz))
-        calculated_field_wpm_abs = torch.abs(calculated_field_wpm)
-        to_tif('calculated_field_wpm.tif', calculated_field_wpm_abs)
+    # # Simulate with slow but accurate WPM:
+    # try:
+    #     calculated_field_wpm_abs = from_tif('calculated_field_wpm.tif').to(torch.float64)
+    # except FileNotFoundError:
+    #     calculated_field_wpm = wpm(
+    #         input_field=input_field,
+    #         wavelength=wavelength,
+    #         index_of_refraction=maxwell_fisheye,
+    #         d_xyz=(dx, dy, dz))
+    #     calculated_field_wpm_abs = torch.abs(calculated_field_wpm)
+    #     to_tif('calculated_field_wpm.tif', calculated_field_wpm_abs)
 
-    # Simulate with fast but inaccurate BPM:
-    calculated_field_bpm = bpm(
-        input_field=input_field,
-        wavelength=wavelength,
-        index_of_refraction=maxwell_fisheye,
-        d_xyz=(dx, dy, dz))
-    calculated_field_bpm_abs = torch.abs(calculated_field_bpm)
-    amplitude_error = calculated_field_bpm_abs - calculated_field_wpm_abs
-    to_tif('amplitude_error_bpm.tif', amplitude_error)
-    to_tif('calculated_field_bpm.tif', calculated_field_bpm_abs)
+    # # Simulate with fast but inaccurate BPM:
+    # calculated_field_bpm = bpm(
+    #     input_field=input_field,
+    #     wavelength=wavelength,
+    #     index_of_refraction=maxwell_fisheye,
+    #     d_xyz=(dx, dy, dz))
+    # calculated_field_bpm_abs = torch.abs(calculated_field_bpm)
+    # amplitude_error = calculated_field_bpm_abs - calculated_field_wpm_abs
+    # to_tif('amplitude_error_bpm.tif', amplitude_error)
+    # to_tif('calculated_field_bpm.tif', calculated_field_bpm_abs)
 
-    # prof = torch.profiler.profile(
-    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
-    # )
-    # prof.start()
+    prof = torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
+    )
+    prof.start()
 
     # Simulate with fast(?) but accurate(?) BPM:
     for nn_bucket_size_factor in range(8):
@@ -73,14 +73,14 @@ def main():
             n_bucket_size=2.0 ** -nn_bucket_size_factor)
         calculated_field = torch.stack(calculated_field)
         calculated_field_abs = torch.abs(calculated_field)
-        amplitude_error = calculated_field_abs - calculated_field_wpm_abs
-        to_tif('amplitude_error_%03d.tif' % (nn_bucket_size_factor), amplitude_error)
+        # amplitude_error = calculated_field_abs - calculated_field_wpm_abs
+        # to_tif('amplitude_error_%03d.tif' % (nn_bucket_size_factor), amplitude_error)
 ##        to_tif('calculated_field_%03d.tif'%(nn), np.abs(calculated_field))
         to_tif('calculated_field_%03d_xz.tif' % (nn_bucket_size_factor),
                torch.abs(calculated_field).sum(axis=1))
-    # prof.step()
-    # prof.stop()
-    # print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1))
+    prof.step()
+    prof.stop()
+    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1))
 
 def bpm(input_field, wavelength, index_of_refraction, d_xyz):
     """Calculate light propagation in a 3D refractive object with the BPM
@@ -157,6 +157,8 @@ def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, n_bucket_size:
     nz, ny, nx = index_of_refraction.shape
     calculated_field = [input_field]
     print("Calculating (faster?) WPM propagation...", sep='', end='')
+    kx_sq = ((2*pi/dx)*fftfreq(nx, device=DEVICE).reshape(1, 1, nx)).square()
+    ky_sq = ((2*pi/dy)*fftfreq(ny, device=DEVICE).reshape(1, ny, 1)).square()
     for n in index_of_refraction:
         print(".", sep='', end='')
         last_field = calculated_field[-1]
@@ -169,10 +171,8 @@ def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, n_bucket_size:
         n_range = torch.linspace(n_min, n_max, n_buckets, device=DEVICE)[:, None, None]
         # print(f"n_min: {n_min}, n_max: {n_max}, n_bucket_size: {n_bucket_size}, n_buckets: {n_buckets}")
         # print(f"n_range: {n_range.shape}")
-        kx = (2*pi/dx)*fftfreq(nx, device=DEVICE).reshape(1, 1, nx)
-        ky = (2*pi/dx)*fftfreq(ny, device=DEVICE).reshape(1, ny, 1)
-        kz_sq = (k*n_range)**2 - kx**2 - ky**2 # Might be negative, so...
-        kz = sqrt(kz_sq.to(torch.complex128)) # complex input -> complex output
+        kz_sq = (k*n_range).square() - kx_sq - ky_sq # Might be negative, so...
+        kz = sqrt(kz_sq.to(torch.complex64)) # complex input -> complex output
         next_field_reference_stack_ft = last_field_ft * exp(1j*kz*dz)
         next_field_reference_stack = ifft(next_field_reference_stack_ft,
                                           dim=(1, 2))
