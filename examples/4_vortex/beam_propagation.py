@@ -16,6 +16,8 @@ This module defines a `Refractive3dOptic` class for designing freeform
 3D refractive optics, and includes some example code for how to use this
 class in the `example_of_usage` string below.
 
+Written by Andrew G. York, licensed CC-BY 4.0.
+
 Inspired and informed by conversations with Shwetadwip Chowdhury, Tanner
 Fadero, Dakota Britton, and (presumably) others I'm forgetting. Credit
 them for what's good here, and blame me for what's bad. Please tell me
@@ -502,28 +504,6 @@ class Refractive3dOptic:
         self._gradient_tensor = [c.grad for c in self._composition_tensor]
         return None
 
-    # def _propagation_phase_mask(self, distance):
-    #     """For simulating propagation in homogenous materials
-
-    #     This is only used inside other private methods, so its
-    #     implemented in torch Tensors, not numpy arrays.
-    #     """
-    #     self._require('wavelength', 'set_2d_input_field')
-    #     # Local nicknames:
-    #     nx, ny, nz = self.coordinates.n_xyz
-    #     dx, dy, dz = self.coordinates.d_xyz
-    #     wavelength, d = self.wavelength, self.device
-    #     fftfreq, nan_to_num = torch.fft.fftfreq, torch.nan_to_num
-    #     pi, sqrt, exp, float64 = torch.pi, torch.sqrt, torch.exp, torch.float64
-    #     # Spatial frequencies as a function of position in FFT space:
-    #     k  = 2*pi / wavelength
-    #     kx = 2*pi * fftfreq(nx, dx, dtype=float64, device=d).reshape( 1, nx)
-    #     ky = 2*pi * fftfreq(ny, dy, dtype=float64, device=d).reshape(ny,  1)
-    #     # with np.errstate(invalid='ignore'): # I don't need this for torch?
-    #     kz = nan_to_num(sqrt(k**2 - kx**2 - ky**2))
-    #     phase_mask = exp(1j*kz*distance)
-    #     return phase_mask
-
     def _propagation_phase_mask(self, distance):
         """For simulating propagation in homogenous materials
 
@@ -541,18 +521,8 @@ class Refractive3dOptic:
         k  = 2*pi / wavelength
         kx = 2*pi * fftfreq(nx, dx, dtype=float64, device=d).reshape( 1, nx)
         ky = 2*pi * fftfreq(ny, dy, dtype=float64, device=d).reshape(ny,  1)
-
-        # *** NEW FIX STARTS HERE ***
-        # Calculate which spatial frequencies correspond to propagating waves
-        # (as opposed to evanescent waves, which decay exponentially and can
-        # cause numerical instability during backpropagation).
-        k_sq_minus_kx_ky_sq = k**2 - kx**2 - ky**2
-        propagating_waves_filter = (k_sq_minus_kx_ky_sq > 0)
-
-        # Only calculate kz for the propagating waves.
-        kz = nan_to_num(sqrt(k_sq_minus_kx_ky_sq * propagating_waves_filter))
-        # *** NEW FIX ENDS HERE ***
-
+        # with np.errstate(invalid='ignore'): # I don't need this for torch?
+        kz = nan_to_num(sqrt(k**2 - kx**2 - ky**2))
         phase_mask = exp(1j*kz*distance)
         return phase_mask
 
@@ -959,21 +929,6 @@ def output_directory():
     output_dir.mkdir(exist_ok=True)
     return output_dir
 
-def _resolve_output_path(filename):
-    """Resolve an output path.
-
-    - If `filename` has no parent directory specified, place it inside
-      the module's default `output/` directory.
-    - If `filename` includes a directory (absolute or relative), use it as-is.
-    In all cases, ensure the parent directory exists.
-    """
-    from pathlib import Path
-    p = Path(filename)
-    if not p.is_absolute() and p.parent == Path('.'):
-        p = output_directory() / p
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
 def to_tif(filename, x):
     import tifffile as tf
     if hasattr(x, 'detach'):
@@ -981,11 +936,11 @@ def to_tif(filename, x):
     x = np.asarray(x).real.astype('float32')
     if x.ndim == 3:
         x = np.expand_dims(x, axis=(0, 2))
-    tf.imwrite(_resolve_output_path(filename), x, imagej=True)
+    tf.imwrite(output_directory() / filename, x, imagej=True)
 
 def from_tif(filename):
     import tifffile as tf
-    return tf.imread(_resolve_output_path(filename))
+    return tf.imread(output_directory() / filename)
 
 def attributes_to_tifs(refractive_optic_sequence, list_of_attributes):
     assert isinstance(refractive_optic_sequence, RefractiveOpticSequence)
@@ -1017,7 +972,7 @@ def plot_loss_history(loss_history, filename):
     plt.ylabel("Loss")
     plt.colorbar(label="Input radial position")
     plt.grid('on', alpha=0.1)
-    plt.savefig(_resolve_output_path(filename))
+    plt.savefig(output_directory() / filename)
     plt.close(fig)
     return None
 

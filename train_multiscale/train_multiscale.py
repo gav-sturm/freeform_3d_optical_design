@@ -30,11 +30,24 @@ from scipy.ndimage import zoom
 from pathlib import Path # Import Path for modern path handling
 import re
 
-# Assuming beam_propagation.py is in the same directory or your PYTHONPATH
-from train_multiscale.beam_propagation_multiscale import (
-    Coordinates, Refractive3dOptic, FixedIndexMaterial,
-    from_tif, to_tif, plot_loss_history, gaussian_beam_2d
-)
+# Prefer the project-root beam_propagation.py; fall back to local copy if needed
+try:
+    from beam_propagation import (
+        Coordinates, Refractive3dOptic, FixedIndexMaterial,
+        from_tif, to_tif, plot_loss_history, gaussian_beam_2d, output_directory
+    )
+except Exception:
+    # If running as a module or from a different CWD, add project root to sys.path
+    import sys
+    from pathlib import Path as _Path
+    _THIS_DIR = _Path(__file__).parent
+    _PROJECT_ROOT = _THIS_DIR.parent
+    if str(_PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PROJECT_ROOT))
+    from beam_propagation import (
+        Coordinates, Refractive3dOptic, FixedIndexMaterial,
+        from_tif, to_tif, plot_loss_history, gaussian_beam_2d, output_directory
+    )
 
 ##############################################################################
 ## CONFIGURATION
@@ -140,29 +153,40 @@ def save_diagnostic_outputs(ro, output_dir, loss_history):
     print(f"Saving intermediate TIFs and loss plot to {output_dir}...")
     ro.update_attributes()
 
-    # Save the optic's physical structure
-    to_tif(output_dir / 'concentration_3d.tif', ro.concentration)
-    to_tif(output_dir / 'concentration_xz_slice.tif',
+    # Match example_of_usage.py exact filenames and numbering inside this stage dir
+    # 00-02: composition and concentration
+    to_tif(output_dir / '00_composition.tif',          ro.composition)
+    to_tif(output_dir / '01_concentration.tif',        ro.concentration)
+    to_tif(output_dir / '02_concentration_xz.tif',
            ro.concentration[:, ro.coordinates.ny//2, :])
 
-    # Save the fields for the most recent training example
-    to_tif(output_dir / 'input_amplitude_2d.tif', np.abs(ro.input_field))
-    to_tif(output_dir / 'input_phase_2d.tif', np.angle(ro.input_field))
-    to_tif(output_dir / 'desired_output_amplitude_2d.tif', np.abs(ro.desired_output_field))
-    to_tif(output_dir / 'desired_output_phase_2d.tif', np.angle(ro.desired_output_field))
-    to_tif(output_dir / 'calculated_output_amplitude_2d.tif', np.abs(ro.calculated_field[-1]))
-    to_tif(output_dir / 'calculated_output_phase_2d.tif', np.angle(ro.calculated_field[-1]))
+    # 03-05: fields at output plane (2D for 03/04; 05 is 3D magnitude of calculated_field)
+    to_tif(output_dir / '03_input_field.tif',          ro.input_field)
+    to_tif(output_dir / '04_desired_output_field.tif', ro.desired_output_field)
+    to_tif(output_dir / '05_calculated_field.tif',     np.abs(ro.calculated_field))
 
-    # Save 3D diagnostic volumes (names match attributes in beam_propagation.py)
-    to_tif(output_dir / 'desired_output_field_3d.tif', np.abs(ro.desired_output_field_3d))
-    to_tif(output_dir / 'calculated_output_field_3d.tif', np.abs(ro.calculated_output_field_3d))
-    to_tif(output_dir / 'error_3d.tif', ro.error_3d)
+    # 06-08: 3D diagnostic volumes (amplitudes for 06/07), exact names per example
+    to_tif(output_dir / '06_desired_output_field_3d',  np.abs(ro.desired_output_field_3d))
+    to_tif(output_dir / '07_calculated_output_field_3d', np.abs(ro.calculated_output_field_3d))
+    to_tif(output_dir / '08_error_3d.tif',             ro.error_3d)
 
-    # Save optimization state
-    to_tif(output_dir / 'gradient_3d.tif', ro.gradient)
+    # 09: gradient
+    to_tif(output_dir / '09_gradient.tif', ro.gradient)
 
-    # Save the loss history plot
-    plot_loss_history(loss_history, output_dir / 'loss_history.png')
+    # 10: loss history plot (PNG)
+    plot_loss_history(loss_history, output_dir / '10_loss_history.png')
+
+    # 11-13: additional phase maps as TIFs (quantitative, ImageJ-friendly)
+    to_tif(output_dir / '11_input_phase.tif',             np.angle(ro.input_field))
+    to_tif(output_dir / '12_desired_output_phase.tif',    np.angle(ro.desired_output_field))
+    to_tif(output_dir / '13_calculated_output_phase.tif', np.angle(ro.calculated_field[-1]))
+
+    # 14-16: 3D phase volumes
+    # - Desired/calculated phase across propagated z-planes at the output
+    # - Phase inside the optic across z (from calculated_field)
+    to_tif(output_dir / '14_desired_output_field_3d_phase.tif',    np.angle(ro.desired_output_field_3d))
+    to_tif(output_dir / '15_calculated_output_field_3d_phase.tif', np.angle(ro.calculated_output_field_3d))
+    to_tif(output_dir / '16_calculated_field_phase_3d.tif',        np.angle(ro.calculated_field))
 
 
 ##############################################################################
@@ -174,8 +198,9 @@ def run_training_stage(stage_config, input_concentration_file=None):
     Executes a single stage of the multi-scale training process.
     """
     stage_name = stage_config['name']
-    # Create a dedicated subfolder for this stage's outputs
-    output_dir = Path('output') / stage_name
+    # Create a dedicated subfolder for this stage's outputs under beam_propagation's output/
+    base_output = output_directory()
+    output_dir = base_output / stage_name
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'='*80}\n--- Starting Stage: {stage_name} ---\n{'='*80}")
