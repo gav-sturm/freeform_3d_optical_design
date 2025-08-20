@@ -1,28 +1,27 @@
 """
 train_multiscale.py
 
-An N-stage, "inside-out" training script for designing large-scale
-freeform 3D refractive optics.
+An N-stage training script for designing large-scale freeform 3D
+refractive optics using a "full-volume interpolation" scaling strategy.
 
-This script implements a robust, physically-grounded scaling strategy.
-It begins with a small, stable baseline simulation and progressively
-"grows" the optic's physical size and grid resolution in stages.
+This script implements a scaling strategy that prioritizes a constant
+physical pixel size across all stages. The grid resolution jumps in
+powers of two, and the physical width of the optic is adjusted
+accordingly to keep the pixel size consistent.
 
 The process is as follows:
-1.  **Start Small:** The first stage runs the known-good baseline
-    simulation to create a small, converged "seed" optic.
-2.  **Expand and Pad:** For each subsequent stage, a larger simulation
-    grid is created. The previously trained smaller optic is placed in
-    the center of this new grid, and the surrounding area is padded.
-3.  **Continue Training:** This padded optic is used as the starting
-    point for the next stage, allowing the optimizer to learn how to
-    extend the solution outwards.
+1.  **Start Small:** The first stage runs a baseline simulation to create
+    a small, converged "seed" optic. This stage defines the target
+    physical pixel size.
+2.  **Interpolate and Stretch:** For each subsequent stage, the grid
+    resolution is doubled. The physical width is increased proportionally
+    to maintain the constant pixel size. The previous optic is stretched
+    to fit this new grid.
+3.  **Continue Training:** This stretched optic is used as the starting
+    point for the next stage, allowing for refinement at a consistent
+    physical resolution.
 
-This process ensures that the simulation is physically valid and stable
-at every stage of the scaling process.
-
-Written by Andrew G. York, licensed CC-BY 4.0.
-Extended and adapted by Gemini.
+Written by Gav Sturm/Gemini
 """
 
 import time
@@ -47,30 +46,35 @@ from train_multiscale.beam_propagation_multiscale import (
 
 def generate_training_schedule(
     num_stages,
-    start_width_um, end_width_um,
+    start_width_um, # Used to define the target pixel size
     start_n_xy, end_n_xy,
     iterations_per_stage,
     start_smoothing, end_smoothing
 ):
     """
-    Programmatically generates a list of training stage configurations.
-
-    This function creates a smooth transition from a small, low-res
-    simulation to a large, high-res one over a specified number of stages.
+    Programmatically generates a training schedule that maintains a constant
+    pixel size while jumping grid resolution by powers of two.
     """
-    # Use logarithmic spacing for physical size to make smaller steps at the beginning.
-    widths = np.logspace(np.log10(start_width_um), np.log10(end_width_um), num_stages)
-    # Keep voxel size constant across stages, using stage 1 as reference
-    # Target voxel size based on stage 1 settings
-    dxy0 = start_width_um / float(start_n_xy)
-    # Derive grid points per stage to maintain constant voxel size
-    n_xys = np.round(widths / dxy0).astype(int)
+    # --- MODIFIED LOGIC: Constant Pixel Size ---
+    # 1. Define the target pixel size from the initial stage's parameters.
+    target_pixel_size = start_width_um / float(start_n_xy)
+    print(f"Target pixel size locked to: {target_pixel_size:.4f} um/pixel")
+
+    # 2. Generate grid sizes that are powers of 2.
+    log_start = np.log2(start_n_xy)
+    log_end = np.log2(end_n_xy)
+    n_xys = np.logspace(log_start, log_end, num=num_stages, base=2).astype(int)
+
+    # 3. Derive the physical width for each stage to maintain the target pixel size.
+    widths = n_xys * target_pixel_size
+    # --- END OF MODIFIED LOGIC ---
+
     smoothing_sigmas = np.linspace(start_smoothing, end_smoothing, num_stages)
 
     stages = []
     for i in range(num_stages):
         stage = {
-            'name': f'Stage{i+1:02d}_Size{widths[i]:.0f}um',
+            'name': f'Stage{i+1:02d}_Size{widths[i]:.1f}um_Grid{n_xys[i]}',
             'physical_width_um': widths[i],
             'n_xy': n_xys[i],
             'n_z': n_xys[i], # Keep n_z the same as n_xy for simplicity
@@ -81,17 +85,17 @@ def generate_training_schedule(
         stages.append(stage)
     return stages
 
-# --- Generate a 10-stage training schedule ---
+# --- Generate a 5-stage training schedule with constant pixel size ---
 TRAINING_STAGES = generate_training_schedule(
-    num_stages=10,
-    start_width_um=25.4,   # Start with the baseline size
-    end_width_um=1000.0,   # End at 1mm
+    num_stages=5,
+    start_width_um=25.4,   # Defines the pixel size for all stages
     start_n_xy=128,        # Start with baseline resolution
     end_n_xy=2048,         # End with high resolution
-    iterations_per_stage=1000, # Fewer iterations per stage are needed
+    iterations_per_stage=1000,
     start_smoothing=5.0,
     end_smoothing=2.0
 )
+
 
 # --- Define the physical properties of the optic ---
 WAVELENGTH_UM = 1.0           # Wavelength of light to simulate
@@ -201,57 +205,33 @@ def run_training_stage(stage_config, input_concentration_file=None):
         print("Initializing optic with random noise.")
         initial_concentration = 0.5 + np.random.randn(*coords.n_xyz[::-1]) * 0.01
     else:
-        # Subsequent stages: load the previous result and resample (trilinear) to match
-        # the physical extent of the previous stage in the new grid's voxel spacing.
-        print(f"Initializing from previous result (trilinear resample): {input_concentration_file}")
+        # Subsequent stages: load the previous result and resample (trilinear)
+        # to stretch it to the full size of the new grid.
+        print(f"Initializing from previous result (full-volume stretch): {input_concentration_file}")
         try:
             prev_concentration = from_tif(input_concentration_file)
-            # Determine shapes
-            new_shape = coords.n_xyz[::-1]  # (z, y, x)
+            
+            # --- Full-Volume Interpolation ("Stretching") ---
+            # This logic remains the same, as we are always stretching from
+            # one power-of-two grid to the next.
+            prev_shape = prev_concentration.shape # (z, y, x)
+            new_shape = coords.n_xyz[::-1]      # (z, y, x)
 
-            # Parse previous stage physical width from the directory name, e.g. 'Stage01_Size25um'
-            prev_stage_dir = Path(input_concentration_file).parent.name
-            m = re.search(r"Size([0-9]+(?:\.[0-9]+)?)um", prev_stage_dir)
-            if m is None:
-                raise ValueError(f"Could not parse previous stage width from '{prev_stage_dir}'")
-            prev_width_um = float(m.group(1))
-
-            # New voxel sizes (x, y, z) in um/voxel
-            dx, dy, dz = coords.d_xyz
-            # Compute the number of voxels the previous physical width should occupy in the new grid
-            target_nx = int(max(1, np.round(prev_width_um / dx)))
-            target_ny = int(max(1, np.round(prev_width_um / dy)))
-            target_nz = int(max(1, np.round(prev_width_um / dz)))
-
-            # Ensure the target core fits inside the new grid
-            target_nz = min(target_nz, new_shape[0])
-            target_ny = min(target_ny, new_shape[1])
-            target_nx = min(target_nx, new_shape[2])
-
-            # Compute trilinear zoom factors from previous shape to target core shape
-            prev_z, prev_y, prev_x = prev_concentration.shape
+            # Compute zoom factors to stretch the previous volume to the new full volume
             zoom_factors = (
-                target_nz / float(prev_z),
-                target_ny / float(prev_y),
-                target_nx / float(prev_x),
+                new_shape[0] / float(prev_shape[0]),
+                new_shape[1] / float(prev_shape[1]),
+                new_shape[2] / float(prev_shape[2]),
             )
+            print(f"Stretching previous result of shape {prev_shape} to new shape {new_shape}.")
 
-            # Trilinear interpolation (order=1)
-            resampled_prev = zoom(prev_concentration, zoom=zoom_factors, order=1, mode='nearest')
-            resampled_prev = np.asarray(resampled_prev, dtype=np.float64)
-            # Clip to valid range
-            resampled_prev = np.clip(resampled_prev, 0.0, 1.0)
-
-            # Build initial full volume filled with neutral 0.5, then paste centered
-            initial_concentration = np.full(new_shape, 0.5, dtype=np.float64)
-            insert_shape = resampled_prev.shape  # (z, y, x)
-            start_idx_new = [(n - i) // 2 for n, i in zip(new_shape, insert_shape)]
-            end_idx_new = [s + i for s, i in zip(start_idx_new, insert_shape)]
-            initial_concentration[
-                start_idx_new[0]:end_idx_new[0],
-                start_idx_new[1]:end_idx_new[1],
-                start_idx_new[2]:end_idx_new[2]
-            ] = resampled_prev
+            # Trilinear interpolation (order=1) to stretch the optic to the full new size
+            initial_concentration = zoom(prev_concentration, zoom=zoom_factors, order=1, mode='nearest')
+            initial_concentration = np.asarray(initial_concentration, dtype=np.float64)
+            
+            # Clip to valid range [0, 1] after interpolation
+            initial_concentration = np.clip(initial_concentration, 0.0, 1.0)
+            
         except FileNotFoundError:
             print(f"ERROR: Could not find file {input_concentration_file}. Aborting.")
             raise
@@ -315,7 +295,7 @@ def main():
     """
     Main function to orchestrate the entire multi-stage training process.
     """
-    print("Starting multi-scale optic design process.")
+    print("Starting multi-scale optic design process (Constant Pixel Size Method).")
     previous_stage_output_file = None
     for stage_config in TRAINING_STAGES:
         previous_stage_output_file = run_training_stage(

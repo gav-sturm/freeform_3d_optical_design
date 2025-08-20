@@ -23,8 +23,7 @@ The process is as follows:
 This approach assumes the low-resolution solution is a good coarse
 approximation of the final high-resolution solution.
 
-Written by Andrew G. York, licensed CC-BY 4.0.
-Extended and adapted by Gemini.
+Written by Gav Sturm/Gemini
 """
 
 import time

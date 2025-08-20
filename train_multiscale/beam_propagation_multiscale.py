@@ -16,8 +16,6 @@ This module defines a `Refractive3dOptic` class for designing freeform
 3D refractive optics, and includes some example code for how to use this
 class in the `example_of_usage` string below.
 
-Written by Andrew G. York, licensed CC-BY 4.0.
-
 Inspired and informed by conversations with Shwetadwip Chowdhury, Tanner
 Fadero, Dakota Britton, and (presumably) others I'm forgetting. Credit
 them for what's good here, and blame me for what's bad. Please tell me
