@@ -59,7 +59,8 @@ def main():
     # to_tif('calculated_field_bpm.tif', calculated_field_bpm_abs)
 
     prof = torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
+        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+        profile_memory=True,
     )
     prof.start()
 
@@ -155,6 +156,7 @@ def fast_wpm(input_field, wavelength, index_of_refraction, d_xyz, n_bucket_size:
     k = 2*pi/wavelength
     dx, dy, dz = d_xyz
     nz, ny, nx = index_of_refraction.shape
+    index_of_refraction = [i.requires_grad_(True) for i in index_of_refraction]
     calculated_field = [input_field]
     print("Calculating (faster?) WPM propagation...", sep='', end='')
     kx_sq = ((2*pi/dx)*fftfreq(nx, device=DEVICE).reshape(1, 1, nx)).square()
