@@ -2,8 +2,59 @@ import time
 import numpy as np
 from beam_propagation import (
     Coordinates, Refractive3dOptic, FixedIndexMaterial,
-    TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history)
+    TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history, gaussian_beam_2d)
 from pointmapping import MyTrainingData_withMapping
+
+class Diffuser:
+    """An example of how to generate training data for an imaging optic.
+
+    This generates input/output pairs that image a pointlike source at
+    the 2d input plane to an inverted (but otherwise identical) image of
+    the input plane to the output plane.
+    """
+    def __init__(self, coordinates, radius):
+        assert isinstance(coordinates, Coordinates)
+        self.coordinates = coordinates
+        assert radius > 0
+        self.radius = radius
+        return None
+
+    def random_point_in_a_circle(self):
+        # Local nicknames:
+        R, sin, cos, pi, sqrt = self.radius, np.sin, np.cos, np.pi, np.sqrt
+        rand = np.random.random_sample
+        # Simple math:
+        r, phi = R*sqrt(rand()), 2*pi*rand()
+        x, y = r*cos(phi), r*sin(phi)
+        return x, y
+
+    def input_output_pair(
+        self,
+        x0,
+        y0,
+        wavelength,
+        divergence_angle_degrees,
+        phi=0,
+        theta=0,
+        ):
+        x0, y0 = float(x0), float(y0)
+        wavelength = float(wavelength)
+        divergence_angle, pi = np.deg2rad(divergence_angle_degrees), np.pi
+        w = wavelength / (pi*divergence_angle)
+        # Input beam is a focused point:
+        x, y, _ = self.coordinates.xyz
+        input_field = gaussian_beam_2d(
+            x=x, y=y, x0=x0, y0=y0, phi=phi, theta=theta,
+            wavelength=wavelength, w=w)
+        
+        output_field = np.zeros_like(input_field)
+        for x, y in np.ndindex(output_field.shape):
+            center_x = output_field.shape[0]/2 - x0
+            center_y = output_field.shape[1]/2 - y0
+            r = np.sqrt((x-center_x)**2 + (y-center_y)**2)
+            output_field[x, y] = (1+np.cos(center_x/2)) * (1+np.cos(center_y/2)) / (r/20+1)**5
+        
+        return input_field, MyTrainingData_withMapping.normalize_power(input_field, output_field)
 
 def example_of_usage():
     """Example code: design a 3D refractive optic with specified input/output.
@@ -64,7 +115,8 @@ def example_of_usage():
     # Make a source to generate training data. In this case, the
     # training data is for a simple plane-to-plane inverting imaging
     # system:
-    data_source = MyTrainingData_withMapping(coords, 3, map_reverse)
+    # data_source = MyTrainingData_withMapping(coords, 3, map_reverse)
+    data_source = Diffuser(coords, 3)
 
     wavelength = 1
     divergence_angle_degrees = 15
@@ -83,7 +135,7 @@ def example_of_usage():
         # calculate loss, and calculate a gradient that hopefully will
         # reduce the loss:
         ro.gradient_update(
-            step_size=100,
+            step_size=1000,
             z_planes=(1, 2, 3),
             smoothing_sigma=5)
         loss_history.append((x0, y0, ro.loss))

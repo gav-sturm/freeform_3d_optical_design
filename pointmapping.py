@@ -91,19 +91,10 @@ class MyTrainingData_withMapping:
             map_reverse=self.map_reverse,
         )
 
-        power_input = self.total_power(input_field)
-        power_output = self.total_power(desired_output_field)
-        power_ratio = power_input / power_output
-
-        desired_output_field *= np.sqrt(power_ratio)
-
-        # print("Power ratio was", power_ratio)
-        # print("Input power:", power_input)
-        # print("Corrected output power", self.total_power(desired_output_field))
-
-        return input_field, desired_output_field
+        return input_field, MyTrainingData_withMapping.normalize_power(input_field, desired_output_field)
     
-    def total_power(self, field: np.ndarray) -> float:
+    @staticmethod
+    def total_power(field: np.ndarray) -> float:
         """
         Approximate total power through an image (arbitrary units).
         """
@@ -112,3 +103,11 @@ class MyTrainingData_withMapping:
         intensity = np.abs(field)**2
 
         return intensity.sum()
+
+    @staticmethod
+    def normalize_power(input_field: np.ndarray, output_field: np.ndarray) -> np.ndarray:
+        power_input = MyTrainingData_withMapping.total_power(input_field)
+        power_output = MyTrainingData_withMapping.total_power(output_field)
+        power_ratio = power_input / power_output
+
+        return output_field * np.sqrt(power_ratio)

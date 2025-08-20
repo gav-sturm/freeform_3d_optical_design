@@ -24,7 +24,6 @@ from gui.visdata import VisData
 from gui.watcher import DataWatcher
 from gui.visualization import Visualization, PngVisualization, VolumeOrthoSlicesVisualization, PropagationViewer
 
-OUTPUT_DIR = Path(__file__).parent.parent / "output"
 POLL_INTERVAL_MS = 1000
 
 logging.basicConfig(
@@ -57,8 +56,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("GRIN Optimizer Visualization")
         self.setMinimumSize(480, 640)
 
+        if len(sys.argv) < 2:
+            print("Please pass the output folder (where the files are stored) as a parameter to this script.")
+            print("Example: python -m gui.main output")
+            exit(1)
+
         # Data watcher & live updates
-        self.watcher = DataWatcher(OUTPUT_DIR, POLL_INTERVAL_MS, self)
+        self.watcher = DataWatcher(Path(sys.argv[1]), POLL_INTERVAL_MS, self)
 
         # Track open visualization windows by name
         self._open_windows: Dict[str, VisualizationWindow] = {}
