@@ -1,45 +1,54 @@
 import time
 import numpy as np
+import scipy.special as sp
 from beam_propagation import (
     Coordinates, Refractive3dOptic, FixedIndexMaterial, gaussian_beam_2d,
     TrainingData_for_2dImaging, from_tif, to_tif, plot_loss_history)
 
-def get_vortex_training_pair(coords, wavelength):
+def get_bessel_training_pair(coords, wavelength):
     """
     Generates a physically accurate, energy-conserved training pair for
-    creating a vortex beam generator.
+    creating a Bessel beam generator.
     """
     # 1. Define the Input Field: A standard, centered Gaussian beam
     input_beam_waist = 5.0
-    # Coordinates.xyz is a tuple of broadcastable grids (x: 1x1xNx, y: 1xNyx1, z: Nzx1x1)
+
     x, y, _ = coords.xyz
     input_field = gaussian_beam_2d(
         x=x, y=y, x0=0, y0=0, phi=0, theta=0,
         wavelength=float(wavelength), w=input_beam_waist)
 
-    # 2. Define the Desired Output Field: A vortex beam (LG01 mode)
+    # --- START OF NEW BESSEL BEAM CODE ---
+    # 2. Define the Desired Output Field: A Bessel beam
+    from scipy.special import jv # Import the Bessel function
+
     radius = np.sqrt(x**2 + y**2)
-    azimuthal_angle = np.arctan2(y, x)
     
-    output_beam_waist = 4.0
-    # "Donut" amplitude profile for a vortex beam
-    desired_amplitude = radius * np.exp(-radius**2 / (2 * output_beam_waist**2))
-    helical_phase = np.exp(1j * azimuthal_angle)
+    # Bessel beam parameters
+    alpha = 1.5  # Controls the size of the central spot
     
-    desired_output_field = (desired_amplitude * helical_phase).astype('complex128').squeeze()
+    # The amplitude is defined by the Bessel function of the first kind, order zero
+    desired_amplitude = jv(0, alpha * radius)
+    
+    # For a simple Bessel beam, the phase is flat (zero)
+    desired_phase = np.zeros_like(desired_amplitude)
+    
+    desired_output_field = (desired_amplitude * np.exp(1j * desired_phase)).astype('complex128').squeeze()
+    # --- END OF NEW BESSEL BEAM CODE ---
     
     # 3. Normalize both fields to have the same total power (energy)
     input_power = np.sum(np.abs(input_field)**2)
     output_power = np.sum(np.abs(desired_output_field)**2)
 
-    if input_power > 1e-9: # Avoid division by zero
+    if input_power > 1e-9:
         input_field /= np.sqrt(input_power)
     if output_power > 1e-9:
         desired_output_field /= np.sqrt(output_power)
             
+    # return input_field, desired_output_field
     return input_field, desired_output_field
 
-def vortex_simulation():
+def bessel_simulation():
     """Example code: design a 3D refractive optic with specified input/output.
 
     Consider copy-pasting this example code to get you started.
@@ -90,8 +99,8 @@ def vortex_simulation():
     for iteration in range(int(1e6)): # Run for a loooong time
         start_time = time.perf_counter()
      
-        ### NEW CODE FOR VORTEX ###
-        input_field, desired_output_field = get_vortex_training_pair(coords, wavelength)
+        ### NEW CODE FOR Bessel Beam ###
+        input_field, desired_output_field = get_bessel_training_pair(coords, wavelength)
         
         ro.set_2d_input_field(input_field, wavelength)
         ro.set_2d_desired_output_field(desired_output_field)
@@ -102,7 +111,7 @@ def vortex_simulation():
         ro.gradient_update(
             step_size=100,
             z_planes=(1, 2, 3),
-            smoothing_sigma=10)
+            smoothing_sigma=5)
         # Centered input in this example (x0=y0=0)
         loss_history.append((0.0, 0.0, ro.loss))
 
@@ -113,57 +122,61 @@ def vortex_simulation():
         # Every so often, output some intermediate state, so we can
         # monitor our progress. You can use ImageJ
         # ( https://imagej.net/ij/ ) to view the TIF files:
-        # if iteration % 50 == 0:
+        if iteration % 50 == 0:
+            ro.update_attributes()
+            print("Saving TIFs etc...", end='')
+            to_tif('00_composition.tif',          ro.composition)
+            to_tif('01_concentration.tif',        ro.concentration)
+            to_tif('02_concentration_xz.tif',
+                   ro.concentration[:, ro.coordinates.ny//2, :])
+            to_tif('03_input_field.tif',          ro.input_field)
+            to_tif('04_desired_output_field.tif', ro.desired_output_field)
+            to_tif('05_calculated_field.tif',
+                   np.abs(ro.calculated_field))
+            to_tif('06_desired_output_field_3d.tif',
+                   np.abs(ro.desired_output_field_3d))
+            to_tif('07_calculated_output_field_3d.tif',
+                   np.abs(ro.calculated_output_field_3d))
+            to_tif('08_error_3d.tif', ro.error_3d)
+            to_tif('09_gradient.tif', ro.gradient)
+            plot_loss_history(loss_history, '10_loss_history.png')
+            to_tif('11_input_phase.tif',             np.angle(ro.input_field))
+            to_tif('12_desired_output_phase.tif',    np.angle(ro.desired_output_field))
+            to_tif('13_calculated_output_phase.tif', np.angle(ro.calculated_field[-1]))
+            # 14-16: 3D phase volumes
+            # - Desired/calculated phase across propagated z-planes at the output
+            # - Phase inside the optic across z (from calculated_field)
+            to_tif('14_desired_output_field_3d_phase.tif',    np.angle(ro.desired_output_field_3d))
+            to_tif('15_calculated_output_field_3d_phase.tif', np.angle(ro.calculated_output_field_3d))
+            to_tif('16_calculated_field_phase_3d.tif',        np.angle(ro.calculated_field))
+
+            print("done.")
+        # if iteration % 5 == 0:
         #     ro.update_attributes()
         #     print("Saving TIFs etc...", end='')
-        #     to_tif('00_composition.tif',          ro.composition)
-        #     to_tif('01_concentration.tif',        ro.concentration)
-        #     to_tif('02_concentration_xz.tif',
-        #            ro.concentration[:, ro.coordinates.ny//2, :])
-        #     to_tif('03_input_field.tif',          ro.input_field)
-        #     to_tif('04_desired_output_field.tif', ro.desired_output_field)
-        #     to_tif('05_calculated_field.tif',
+        #     to_tif('composition.tif',          ro.composition)
+        #     to_tif('concentration.tif',        ro.concentration)
+        #     to_tif('input_field.tif',          ro.input_field)
+        #     #to_tif('desired_output_field_amplitude.tif', np.real(ro.desired_output_field))
+        #     to_tif('desired_output_field_amplitude.tif', np.abs(ro.desired_output_field))
+
+        #     to_tif('desired_output_field_phase.tif', np.angle(ro.desired_output_field))
+        #     to_tif('calculated_field_amplitude.tif',
         #            np.abs(ro.calculated_field))
-        #     to_tif('06_desired_output_field_3d.tif',
+        #     to_tif('calculated_field_phase.tif',
+        #            np.angle(ro.calculated_field))
+        #     to_tif('desired_output_field_3d.tif',
         #            np.abs(ro.desired_output_field_3d))
-        #     to_tif('07_calculated_output_field_3d.tif',
+        #     to_tif('calculated_output_field_3d.tif',
         #            np.abs(ro.calculated_output_field_3d))
-        #     to_tif('08_error_3d.tif', ro.error_3d)
-        #     to_tif('09_gradient.tif', ro.gradient)
+        #     to_tif('error_3d.tif', ro.error_3d)
+        #     to_tif('gradient.tif', ro.gradient)
         #     plot_loss_history(loss_history, '10_loss_history.png')
-        #     to_tif('11_input_phase.tif',             np.angle(ro.input_field))
-        #     to_tif('12_desired_output_phase.tif',    np.angle(ro.desired_output_field))
-        #     to_tif('13_calculated_output_phase.tif', np.angle(ro.calculated_field[-1]))
-        #     # 14-16: 3D phase volumes
-        #     # - Desired/calculated phase across propagated z-planes at the output
-        #     # - Phase inside the optic across z (from calculated_field)
         #     to_tif('14_desired_output_field_3d_phase.tif',    np.angle(ro.desired_output_field_3d))
         #     to_tif('15_calculated_output_field_3d_phase.tif', np.angle(ro.calculated_output_field_3d))
         #     to_tif('16_calculated_field_phase_3d.tif',        np.angle(ro.calculated_field))
 
         #     print("done.")
-        if iteration % 5 == 0:
-            ro.update_attributes()
-            print("Saving TIFs etc...", end='')
-            to_tif('composition.tif',          ro.composition)
-            to_tif('concentration.tif',        ro.concentration)
-            to_tif('input_field.tif',          ro.input_field)
-            #to_tif('desired_output_field_amplitude.tif', np.real(ro.desired_output_field))
-            to_tif('desired_output_field_amplitude.tif', np.abs(ro.desired_output_field))
-
-            to_tif('desired_output_field_phase.tif', np.angle(ro.desired_output_field))
-            to_tif('calculated_field_amplitude.tif',
-                   np.abs(ro.calculated_field))
-            to_tif('calculated_field_phase.tif',
-                   np.angle(ro.calculated_field))
-            to_tif('desired_output_field_3d.tif',
-                   np.abs(ro.desired_output_field_3d))
-            to_tif('calculated_output_field_3d.tif',
-                   np.abs(ro.calculated_output_field_3d))
-            to_tif('error_3d.tif', ro.error_3d)
-            to_tif('gradient.tif', ro.gradient)
-            plot_loss_history(loss_history, '10_loss_history.png')
-            print("done.")
 
 if __name__ == '__main__':
-    vortex_simulation()
+    bessel_simulation()
