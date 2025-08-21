@@ -122,21 +122,22 @@ def example_of_usage():
         if iteration % 50 == 0:
             ro.update_attributes()
             print("Saving TIFs etc...", end='')
-            to_tif('00_composition.tif',          ro.composition)
-            to_tif('01_concentration.tif',        ro.concentration)
-            to_tif('02_concentration_xz.tif',
-                   ro.concentration[:, ro.coordinates.ny//2, :])
-            to_tif('03_input_field.tif',          ro.input_field)
-            to_tif('04_desired_output_field.tif', ro.desired_output_field)
-            to_tif('05_calculated_field.tif',
+            to_tif('composition.tif',          ro.composition)
+            to_tif('concentration.tif',        ro.concentration)
+            to_tif('input_field.tif',          ro.input_field)
+            to_tif('desired_output_field_amplitude.tif', np.abs(ro.desired_output_field))
+            to_tif('desired_output_field_phase.tif', np.angle(ro.desired_output_field))
+            to_tif('calculated_field_amplitude.tif',
                    np.abs(ro.calculated_field))
-            to_tif('06_desired_output_field_3d',
+            to_tif('calculated_field_phase.tif',
+                   np.angle(ro.calculated_field))
+            to_tif('desired_output_field_3d.tif',
                    np.abs(ro.desired_output_field_3d))
-            to_tif('07_calculated_output_field_3d',
+            to_tif('calculated_output_field_3d.tif',
                    np.abs(ro.calculated_output_field_3d))
-            to_tif('08_error_3d.tif', ro.error_3d)
-            to_tif('09_gradient.tif', ro.gradient)
-            plot_loss_history(loss_history, '10_loss_history.png')
+            to_tif('error_3d_intensity.tif', ro.error_3d)
+            to_tif('gradient.tif', ro.gradient)
+            plot_loss_history(loss_history, 'loss_history.png')
             print("done.")
 
 if __name__ == '__main__':
