@@ -120,61 +120,61 @@ def airy_simulation():
         # Every so often, output some intermediate state, so we can
         # monitor our progress. You can use ImageJ
         # ( https://imagej.net/ij/ ) to view the TIF files:
-        if iteration % 50 == 0:
+        # if iteration % 50 == 0:
+        #     ro.update_attributes()
+        #     print("Saving TIFs etc...", end='')
+            # to_tif('00_composition.tif',          ro.composition)
+            # to_tif('01_concentration.tif',        ro.concentration)
+            # to_tif('02_concentration_xz.tif',
+            #        ro.concentration[:, ro.coordinates.ny//2, :])
+            # to_tif('03_input_field.tif',          ro.input_field)
+            # to_tif('04_desired_output_field.tif', ro.desired_output_field)
+            # to_tif('05_calculated_field.tif',
+            #        np.abs(ro.calculated_field))
+            # to_tif('06_desired_output_field_3d.tif',
+            #        np.abs(ro.desired_output_field_3d))
+            # to_tif('07_calculated_output_field_3d.tif',
+            #        np.abs(ro.calculated_output_field_3d))
+            # to_tif('08_error_3d.tif', ro.error_3d)
+            # to_tif('09_gradient.tif', ro.gradient)
+            # plot_loss_history(loss_history, '10_loss_history.png')
+            # to_tif('11_input_phase.tif',             np.angle(ro.input_field))
+            # to_tif('12_desired_output_phase.tif',    np.angle(ro.desired_output_field))
+            # to_tif('13_calculated_output_phase.tif', np.angle(ro.calculated_field[-1]))
+            # # 14-16: 3D phase volumes
+            # # - Desired/calculated phase across propagated z-planes at the output
+            # # - Phase inside the optic across z (from calculated_field)
+            # to_tif('14_desired_output_field_3d_phase.tif',    np.angle(ro.desired_output_field_3d))
+            # to_tif('15_calculated_output_field_3d_phase.tif', np.angle(ro.calculated_output_field_3d))
+            # to_tif('16_calculated_field_phase_3d.tif',        np.angle(ro.calculated_field))
+
+            # print("done.")
+        if iteration % 5 == 0:
             ro.update_attributes()
             print("Saving TIFs etc...", end='')
-            to_tif('00_composition.tif',          ro.composition)
-            to_tif('01_concentration.tif',        ro.concentration)
-            to_tif('02_concentration_xz.tif',
-                   ro.concentration[:, ro.coordinates.ny//2, :])
-            to_tif('03_input_field.tif',          ro.input_field)
-            to_tif('04_desired_output_field.tif', ro.desired_output_field)
-            to_tif('05_calculated_field.tif',
+            to_tif('composition.tif',          ro.composition)
+            to_tif('concentration.tif',        ro.concentration)
+            to_tif('input_field.tif',          ro.input_field)
+            #to_tif('desired_output_field_amplitude.tif', np.real(ro.desired_output_field))
+            to_tif('desired_output_field_amplitude.tif', np.abs(ro.desired_output_field))
+
+            to_tif('desired_output_field_phase.tif', np.angle(ro.desired_output_field))
+            to_tif('calculated_field_amplitude.tif',
                    np.abs(ro.calculated_field))
-            to_tif('06_desired_output_field_3d.tif',
+            to_tif('calculated_field_phase.tif',
+                   np.angle(ro.calculated_field))
+            to_tif('desired_output_field_3d.tif',
                    np.abs(ro.desired_output_field_3d))
-            to_tif('07_calculated_output_field_3d.tif',
+            to_tif('calculated_output_field_3d.tif',
                    np.abs(ro.calculated_output_field_3d))
-            to_tif('08_error_3d.tif', ro.error_3d)
-            to_tif('09_gradient.tif', ro.gradient)
+            to_tif('error_3d.tif', ro.error_3d)
+            to_tif('gradient.tif', ro.gradient)
             plot_loss_history(loss_history, '10_loss_history.png')
-            to_tif('11_input_phase.tif',             np.angle(ro.input_field))
-            to_tif('12_desired_output_phase.tif',    np.angle(ro.desired_output_field))
-            to_tif('13_calculated_output_phase.tif', np.angle(ro.calculated_field[-1]))
-            # 14-16: 3D phase volumes
-            # - Desired/calculated phase across propagated z-planes at the output
-            # - Phase inside the optic across z (from calculated_field)
             to_tif('14_desired_output_field_3d_phase.tif',    np.angle(ro.desired_output_field_3d))
             to_tif('15_calculated_output_field_3d_phase.tif', np.angle(ro.calculated_output_field_3d))
             to_tif('16_calculated_field_phase_3d.tif',        np.angle(ro.calculated_field))
 
             print("done.")
-        # if iteration % 5 == 0:
-        #     ro.update_attributes()
-        #     print("Saving TIFs etc...", end='')
-        #     to_tif('composition.tif',          ro.composition)
-        #     to_tif('concentration.tif',        ro.concentration)
-        #     to_tif('input_field.tif',          ro.input_field)
-        #     #to_tif('desired_output_field_amplitude.tif', np.real(ro.desired_output_field))
-        #     to_tif('desired_output_field_amplitude.tif', np.abs(ro.desired_output_field))
-
-        #     to_tif('desired_output_field_phase.tif', np.angle(ro.desired_output_field))
-        #     to_tif('calculated_field_amplitude.tif',
-        #            np.abs(ro.calculated_field))
-        #     to_tif('calculated_field_phase.tif',
-        #            np.angle(ro.calculated_field))
-        #     to_tif('desired_output_field_3d.tif',
-        #            np.abs(ro.desired_output_field_3d))
-        #     to_tif('calculated_output_field_3d.tif',
-        #            np.abs(ro.calculated_output_field_3d))
-        #     to_tif('error_3d.tif', ro.error_3d)
-        #     to_tif('gradient.tif', ro.gradient)
-        #     plot_loss_history(loss_history, '10_loss_history.png')
-        #     to_tif('14_desired_output_field_3d_phase.tif',    np.angle(ro.desired_output_field_3d))
-        #     to_tif('15_calculated_output_field_3d_phase.tif', np.angle(ro.calculated_output_field_3d))
-        #     to_tif('16_calculated_field_phase_3d.tif',        np.angle(ro.calculated_field))
-
-        #     print("done.")
 
 if __name__ == '__main__':
     airy_simulation()
