@@ -49,10 +49,10 @@ class Diffuser:
         
         output_field = np.zeros_like(input_field)
         for x, y in np.ndindex(output_field.shape):
-            center_x = output_field.shape[0]/2 - x0
-            center_y = output_field.shape[1]/2 - y0
-            r = np.sqrt((x-center_x)**2 + (y-center_y)**2)
-            output_field[x, y] = (1+np.cos(center_x/2)) * (1+np.cos(center_y/2)) / (r/20+1)**5
+            center_x = output_field.shape[0]/2
+            center_y = output_field.shape[1]/2
+            r2 = (x-center_x)**2 + (y-center_y)**2
+            output_field[x, y] = np.exp(-r2 / 100)
         
         return input_field, MyTrainingData_withMapping.normalize_power(input_field, output_field)
 
@@ -135,9 +135,9 @@ def example_of_usage():
         # calculate loss, and calculate a gradient that hopefully will
         # reduce the loss:
         ro.gradient_update(
-            step_size=1000,
-            z_planes=(1, 2, 3),
-            smoothing_sigma=5)
+            step_size=100,
+            z_planes=list(range(1,3)),
+            smoothing_sigma=3)
         loss_history.append((x0, y0, ro.loss))
 
         end_time = time.perf_counter()
@@ -153,7 +153,7 @@ def example_of_usage():
             to_tif('composition.tif',          ro.composition)
             to_tif('concentration.tif',        ro.concentration)
             to_tif('input_field.tif',          ro.input_field)
-            to_tif('desired_output_field_amplitude.tif', np.real(ro.desired_output_field))
+            to_tif('desired_output_field_amplitude.tif', np.abs(ro.desired_output_field))
             to_tif('desired_output_field_phase.tif', np.angle(ro.desired_output_field))
             to_tif('calculated_field_amplitude.tif',
                    np.abs(ro.calculated_field))
@@ -163,10 +163,9 @@ def example_of_usage():
                    np.abs(ro.desired_output_field_3d))
             to_tif('calculated_output_field_3d.tif',
                    np.abs(ro.calculated_output_field_3d))
-            to_tif('error_3d.tif', ro.error_3d)
+            to_tif('error_3d_intensity.tif', ro.error_3d)
             to_tif('gradient.tif', ro.gradient)
-            plot_loss_history(loss_history, '10_loss_history.png')
-            print("done.")
+            plot_loss_history(loss_history, 'loss_history.png')
 
 if __name__ == '__main__':
     example_of_usage()
