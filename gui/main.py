@@ -96,7 +96,8 @@ class MainWindow(QMainWindow):
         visualizations = [
             PngVisualization("loss_history_image").rename("Loss History"),
             VolumeOrthoSlicesVisualization("concentration").rename("Material Orthoview"),
-            PropagationViewer("calculated_field_complex", "desired_output_field_complex").rename("Light Propagation")
+            PropagationViewer("calculated_field_complex", "desired_output_field_complex").rename("Light Propagation"),
+            VolumeOrthoSlicesVisualization("error_3d_intensity").rename("Error after transmission"),
         ]
 
         if isinstance(os.environ.get("DEBUG", None), str):

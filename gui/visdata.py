@@ -87,13 +87,12 @@ class VisData:
             "calculated_field_amplitude": base_dir / "calculated_field_amplitude.tif",
             "calculated_field_phase": base_dir / "calculated_field_phase.tif",
             # Errors (3D)
-            "error_3d_amplitude": base_dir / "error_3d_amplitude.tif",
-            "error_3d_phase": base_dir / "error_3d_phase.tif",
+            "error_3d_intensity": base_dir / "error_3d_intensity.tif",
             # Gradient (3D)
             "gradient_amplitude": base_dir / "gradient_amplitude.tif",
             "gradient_phase": base_dir / "gradient_phase.tif",
             # PNG
-            "loss_history": base_dir / "10_loss_history.png",
+            "loss_history": base_dir / "loss_history.png",
         }
 
         # Data containers
@@ -161,9 +160,7 @@ class VisData:
         calc_ph = _read_tiff(self.paths["calculated_field_phase"])  # 3D float, 0..2pi
         self.calculated_field_complex = _amp_phase_to_complex(calc_amp, calc_ph)
 
-        err_amp = _read_tiff(self.paths["error_3d_amplitude"])  # 3D float, -inf..inf
-        err_ph = _read_tiff(self.paths["error_3d_phase"])  # 3D float, 0..2pi
-        self.error_3d_complex = _amp_phase_to_complex(err_amp, err_ph)
+        self.error_3d_intensity = _read_tiff(self.paths["error_3d_intensity"])
 
         grad_amp = _read_tiff(self.paths["gradient_amplitude"])  # 3D float, -inf..inf
         grad_ph = _read_tiff(self.paths["gradient_phase"])  # 3D float, 0..2pi
